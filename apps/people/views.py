@@ -18,15 +18,16 @@ class PersonViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.is_manager:
-            return Person.objects.select_related("campus").all()
+            return Person.objects.select_related("campus").prefetch_related("ministries").all()
         led = led_ministries(user)
         if led.exists():
             return (
                 Person.objects.select_related("campus")
+                .prefetch_related("ministries")
                 .filter(Q(pk=user.pk) | Q(ministries__in=led))
                 .distinct()
             )
-        return Person.objects.select_related("campus").filter(pk=user.pk)
+        return Person.objects.select_related("campus").prefetch_related("ministries").filter(pk=user.pk)
 
 
 class MeView(APIView):

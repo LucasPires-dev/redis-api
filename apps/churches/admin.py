@@ -51,8 +51,12 @@ class MinistryLeadershipAdmin(admin.ModelAdmin):
 
 @admin.register(MinistryGeneralLeadership)
 class MinistryGeneralLeadershipAdmin(admin.ModelAdmin):
-    list_display = ["kind", "leader"]
-    autocomplete_fields = ["leader"]
+    list_display = ["kind", "leaders_display"]
+    filter_horizontal = ["leaders"]
+
+    @admin.display(description="Líderes")
+    def leaders_display(self, obj):
+        return ", ".join(p.name for p in obj.leaders.all())
 
 
 class TeamLeadershipInline(admin.TabularInline):

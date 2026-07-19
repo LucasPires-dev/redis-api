@@ -33,7 +33,8 @@ def test_general_leader_can_manage_ministry_of_their_kind_at_any_campus(
     regular_person, brave, other_ministry
 ):
     # other_ministry is kind=jovens; make regular_person the general leader of "jovens".
-    MinistryGeneralLeadership.objects.create(kind=MinistryKind.JOVENS, leader=regular_person)
+    leadership = MinistryGeneralLeadership.objects.create(kind=MinistryKind.JOVENS)
+    leadership.leaders.add(regular_person)
     assert can_manage_ministry(regular_person, other_ministry)
     assert not can_manage_ministry(regular_person, brave)
     assert general_led_kinds(regular_person) == {MinistryKind.JOVENS}

@@ -14,6 +14,7 @@ from .models import (
     Campus,
     Church,
     Ministry,
+    MinistryGeneralLeadership,
     MinistryLeadership,
     Team,
     TeamLeadership,
@@ -35,6 +36,7 @@ from .serializers import (
     ActivitySerializer,
     CampusSerializer,
     ChurchSerializer,
+    MinistryGeneralLeadershipSerializer,
     MinistryLeadershipInputSerializer,
     MinistryLeadershipSerializer,
     MinistryMemberSerializer,
@@ -63,6 +65,15 @@ class ChurchViewSet(viewsets.ReadOnlyModelViewSet):
 class CampusViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Campus.objects.select_related("church").all()
     serializer_class = CampusSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class MinistryGeneralLeadershipViewSet(viewsets.ReadOnlyModelViewSet):
+    """Assignment happens via admin/seed for now (see plan) — read-only endpoint so
+    the frontend can show "líder geral" on the ministry list/detail screens."""
+
+    queryset = MinistryGeneralLeadership.objects.prefetch_related("leaders").all()
+    serializer_class = MinistryGeneralLeadershipSerializer
     permission_classes = [IsAuthenticated]
 
 
@@ -139,6 +150,9 @@ class TeamViewSet(viewsets.ModelViewSet):
         qs = Team.objects.select_related("ministry").prefetch_related(
             "leaderships__person", "members", "point_awards"
         )
+        ministry_id = self.request.query_params.get("ministry")
+        if ministry_id:
+            qs = qs.filter(ministry_id=ministry_id)
         return scope_teams(qs, self.request.user)
 
     @action(detail=True, methods=["get", "post"], url_path="leaderships")

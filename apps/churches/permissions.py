@@ -15,7 +15,7 @@ def general_led_kinds(person):
     if not person.is_authenticated:
         return set()
     return set(
-        MinistryGeneralLeadership.objects.filter(leader=person).values_list("kind", flat=True)
+        MinistryGeneralLeadership.objects.filter(leaders=person).values_list("kind", flat=True)
     )
 
 

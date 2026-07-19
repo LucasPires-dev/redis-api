@@ -44,6 +44,7 @@ class PersonSerializer(serializers.ModelSerializer):
     )
     password = serializers.CharField(write_only=True, required=False, style={"input_type": "password"})
     total_points = serializers.SerializerMethodField()
+    ministries = MinistryMiniSerializer(many=True, read_only=True)
 
     class Meta:
         model = Person
@@ -60,6 +61,7 @@ class PersonSerializer(serializers.ModelSerializer):
             "is_manager",
             "password",
             "total_points",
+            "ministries",
         ]
         read_only_fields = ["is_manager"]
 

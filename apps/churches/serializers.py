@@ -223,8 +223,8 @@ class MinistryGeneralLeadershipSerializer(serializers.ModelSerializer):
     same as Church/Campus creation (see docs: only local ministry leadership has a
     write endpoint right now)."""
 
-    leader = PersonMiniSerializer(read_only=True)
+    leaders = PersonMiniSerializer(many=True, read_only=True)
 
     class Meta:
         model = MinistryGeneralLeadership
-        fields = ["id", "kind", "leader"]
+        fields = ["id", "kind", "leaders"]

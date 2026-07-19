@@ -93,15 +93,13 @@ class MinistryLeadership(models.Model):
 
 
 class MinistryGeneralLeadership(models.Model):
-    """The leader of a MinistryKind across every campus (e.g. líder geral de Jovens)."""
+    """The leader(s) of a MinistryKind across every campus (e.g. líder geral de Jovens)."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     kind = models.CharField(max_length=32, choices=MinistryKind.choices, unique=True)
-    leader = models.ForeignKey(
+    leaders = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
-        null=True,
         blank=True,
-        on_delete=models.SET_NULL,
         related_name="general_leaderships",
     )
     created_at = models.DateTimeField(auto_now_add=True)

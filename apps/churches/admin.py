@@ -4,6 +4,9 @@ from .models import (
     Activity,
     ActivityCompletion,
     Campus,
+    CampusLeadership,
+    Cell,
+    CellLeadership,
     Church,
     Ministry,
     MinistryGeneralLeadership,
@@ -20,11 +23,25 @@ class ChurchAdmin(admin.ModelAdmin):
     search_fields = ["name", "abbreviation"]
 
 
+class CampusLeadershipInline(admin.TabularInline):
+    model = CampusLeadership
+    extra = 1
+    autocomplete_fields = ["person"]
+
+
 @admin.register(Campus)
 class CampusAdmin(admin.ModelAdmin):
     list_display = ["name", "church", "city"]
     list_filter = ["church"]
     search_fields = ["name", "city"]
+    inlines = [CampusLeadershipInline]
+
+
+@admin.register(CampusLeadership)
+class CampusLeadershipAdmin(admin.ModelAdmin):
+    list_display = ["person", "campus", "role"]
+    list_filter = ["role", "campus"]
+    autocomplete_fields = ["person", "campus"]
 
 
 class MinistryLeadershipInline(admin.TabularInline):
@@ -57,6 +74,28 @@ class MinistryGeneralLeadershipAdmin(admin.ModelAdmin):
     @admin.display(description="Líderes")
     def leaders_display(self, obj):
         return ", ".join(p.name for p in obj.leaders.all())
+
+
+class CellLeadershipInline(admin.TabularInline):
+    model = CellLeadership
+    extra = 1
+    autocomplete_fields = ["person"]
+
+
+@admin.register(Cell)
+class CellAdmin(admin.ModelAdmin):
+    list_display = ["name", "campus", "target_audience", "weekday", "address"]
+    list_filter = ["target_audience", "campus"]
+    search_fields = ["name", "address", "description"]
+    filter_horizontal = ["members"]
+    inlines = [CellLeadershipInline]
+
+
+@admin.register(CellLeadership)
+class CellLeadershipAdmin(admin.ModelAdmin):
+    list_display = ["person", "cell", "role"]
+    list_filter = ["role", "cell"]
+    autocomplete_fields = ["person", "cell"]
 
 
 class TeamLeadershipInline(admin.TabularInline):

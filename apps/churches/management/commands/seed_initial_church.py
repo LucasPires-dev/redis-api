@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from apps.churches.choices import LeadershipRole, MinistryKind
-from apps.churches.models import Campus, Church, Ministry, MinistryLeadership
+from apps.churches.models import Campus, CampusLeadership, Church, Ministry, MinistryLeadership
 
 Person = get_user_model()
 
@@ -57,9 +57,43 @@ class Command(BaseCommand):
                 ministry=ministry, person=person, defaults={"role": role}
             )
 
+        campus_leaders = [
+            ("leandro@ilan.church", "Leandro"),
+            ("ana.paula@ilan.church", "Ana Paula"),
+        ]
+        for email, name in campus_leaders:
+            person, created = Person.objects.get_or_create(
+                email=email, defaults={"name": name, "campus": campus}
+            )
+            if created:
+                person.set_password(TEMP_PASSWORD)
+                person.save(update_fields=["password"])
+            # Both are campus leaders (role=leader) — no hierarchy between them, same
+            # access level, confirmed with the user rather than assumed.
+            CampusLeadership.objects.update_or_create(
+                campus=campus, person=person, defaults={"role": LeadershipRole.LEADER}
+            )
+
+        reconciliacao_ministry, _ = Ministry.objects.get_or_create(
+            campus=campus,
+            kind=MinistryKind.RECONCILIACAO,
+            defaults={"name": "Reconciliação", "description": "Acompanhamento de novos convertidos."},
+        )
+        daniel, created = Person.objects.get_or_create(
+            email="daniel@ilan.church", defaults={"name": "Daniel", "campus": campus}
+        )
+        if created:
+            daniel.set_password(TEMP_PASSWORD)
+            daniel.save(update_fields=["password"])
+        MinistryLeadership.objects.update_or_create(
+            ministry=reconciliacao_ministry, person=daniel, defaults={"role": LeadershipRole.LEADER}
+        )
+
         self.stdout.write(
             self.style.SUCCESS(
-                f"Seeded {church} / {campus} / {ministry} with {len(leaders)} leaders + 1 manager.\n"
+                f"Seeded {church} / {campus} / {ministry} with {len(leaders)} ministry leaders, "
+                f"{len(campus_leaders)} campus leaders (Leandro, Ana Paula), "
+                f"{reconciliacao_ministry} led by Daniel, + 1 manager.\n"
                 f"Placeholder password for every seeded account: {TEMP_PASSWORD} — change it via /admin/ or the API."
             )
         )

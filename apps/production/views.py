@@ -1,0 +1,103 @@
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+from .choices import DemandStatus
+from .models import Demand, Event, RundownItem, RundownItemStatus
+from .permissions import (
+    DemandPermission,
+    EventPermission,
+    RundownItemPermission,
+    scope_demands,
+    scope_events,
+)
+from .serializers import (
+    DemandSerializer,
+    EventSerializer,
+    RejectDemandInputSerializer,
+    RundownItemSerializer,
+    SetItemStatusInputSerializer,
+)
+
+
+class EventViewSet(viewsets.ModelViewSet):
+    serializer_class = EventSerializer
+    permission_classes = [EventPermission]
+
+    def get_queryset(self):
+        qs = Event.objects.select_related("campus").prefetch_related("rundown_items__statuses")
+        campus_id = self.request.query_params.get("campus")
+        if campus_id:
+            qs = qs.filter(campus_id=campus_id)
+        return scope_events(qs, self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class RundownItemViewSet(viewsets.ModelViewSet):
+    serializer_class = RundownItemSerializer
+    permission_classes = [RundownItemPermission]
+
+    def get_queryset(self):
+        qs = RundownItem.objects.select_related("event", "event__campus").prefetch_related("statuses")
+        event_id = self.request.query_params.get("event")
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return qs.filter(event__in=scope_events(Event.objects.all(), self.request.user))
+
+    @action(detail=True, methods=["post"], url_path="set-status")
+    def set_status(self, request, pk=None):
+        item = self.get_object()  # has_object_permission -> can_report_item_status
+        serializer = SetItemStatusInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        RundownItemStatus.objects.update_or_create(
+            rundown_item=item,
+            ministry_kind=serializer.validated_data["ministry_kind"],
+            defaults={
+                "status": serializer.validated_data["status"],
+                "updated_by": request.user,
+            },
+        )
+        item.refresh_from_db()
+        return Response(RundownItemSerializer(item).data)
+
+
+class DemandViewSet(viewsets.ModelViewSet):
+    serializer_class = DemandSerializer
+    permission_classes = [DemandPermission]
+
+    def get_queryset(self):
+        qs = Demand.objects.select_related("event", "event__campus", "from_campus", "to_campus", "created_by")
+        direction = self.request.query_params.get("direction")
+        event_id = self.request.query_params.get("event")
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return scope_demands(qs, self.request.user, direction=direction)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, status=DemandStatus.OPEN)
+
+    @action(detail=True, methods=["post"], url_path="accept")
+    def accept(self, request, pk=None):
+        demand = self.get_object()  # has_object_permission -> can_manage_demand_target
+        demand.status = DemandStatus.IN_PROGRESS
+        demand.save(update_fields=["status", "updated_at"])
+        return Response(DemandSerializer(demand).data)
+
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        demand = self.get_object()
+        demand.status = DemandStatus.DONE
+        demand.save(update_fields=["status", "updated_at"])
+        return Response(DemandSerializer(demand).data)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        demand = self.get_object()
+        serializer = RejectDemandInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        demand.status = DemandStatus.REJECTED
+        demand.rejection_reason = serializer.validated_data["rejection_reason"]
+        demand.save(update_fields=["status", "rejection_reason", "updated_at"])
+        return Response(DemandSerializer(demand).data)

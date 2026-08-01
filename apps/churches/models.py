@@ -38,6 +38,35 @@ class Campus(models.Model):
     def __str__(self):
         return self.name
 
+    def leaders(self):
+        return [cl.person for cl in self.leaderships.filter(role=LeadershipRole.LEADER)]
+
+    def co_leaders(self):
+        return [cl.person for cl in self.leaderships.filter(role=LeadershipRole.CO_LEADER)]
+
+
+class CampusLeadership(models.Model):
+    """Same idea as MinistryLeadership/CellLeadership/TeamLeadership: a row here, not a
+    fixed field on Person — leadership of a campus must be reassignable without
+    touching the person's own record, and a member can become leader (or stop being
+    one) later."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name="leaderships")
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="campus_leaderships"
+    )
+    role = models.CharField(max_length=16, choices=LeadershipRole.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["campus", "person"], name="unique_campus_leadership_per_person"),
+        ]
+
+    def __str__(self):
+        return f"{self.person} — {self.get_role_display()} de {self.campus}"
+
 
 class Ministry(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -107,6 +136,58 @@ class MinistryGeneralLeadership(models.Model):
 
     def __str__(self):
         return f"Líder geral de {self.get_kind_display()}"
+
+
+class Cell(models.Model):
+    """A célula/GT — a small group tied directly to a Campus (not to a Ministry)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name="cells")
+    name = models.CharField(max_length=150)
+    weekday = models.CharField(max_length=20, blank=True)
+    target_audience = models.CharField(max_length=32, choices=MinistryKind.choices, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True)
+    members = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="cells")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["campus", "name"], name="unique_cell_name_per_campus"),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.campus.name})"
+
+    def leaders(self):
+        return [cl.person for cl in self.leaderships.filter(role=LeadershipRole.LEADER)]
+
+    def co_leaders(self):
+        return [cl.person for cl in self.leaderships.filter(role=LeadershipRole.CO_LEADER)]
+
+
+class CellLeadership(models.Model):
+    """Same idea as MinistryLeadership/TeamLeadership: a row here, not a fixed field on
+    Person — leadership of a célula must be reassignable without touching the person's
+    own record, and a member can become leader (or stop being one) later."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cell = models.ForeignKey(Cell, on_delete=models.CASCADE, related_name="leaderships")
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cell_leaderships"
+    )
+    role = models.CharField(max_length=16, choices=LeadershipRole.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["cell", "person"], name="unique_cell_leadership_per_person"),
+        ]
+
+    def __str__(self):
+        return f"{self.person} — {self.get_role_display()} de {self.cell}"
 
 
 class Team(models.Model):

@@ -53,3 +53,11 @@ def test_scope_ministries_leader_sees_only_led_ministry(leader, brave, other_min
 def test_scope_ministries_regular_person_sees_nothing(regular_person, brave, other_ministry):
     result = set(scope_ministries(Ministry.objects.all(), regular_person))
     assert result == set()
+
+
+def test_scope_ministries_plain_member_sees_their_own_ministry(regular_person, brave, other_ministry):
+    """A rank-and-file member (no leadership row) must still see their own
+    ministry — same precedent as scope_cells's Q(members=person)."""
+    brave.members.add(regular_person)
+    result = set(scope_ministries(Ministry.objects.all(), regular_person))
+    assert result == {brave}

@@ -1,7 +1,7 @@
 from django.db.models import Q
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from .models import Activity, Ministry, MinistryGeneralLeadership, Team
+from .models import Activity, Campus, Cell, Ministry, MinistryGeneralLeadership, Team
 
 
 def led_ministries(person):
@@ -9,6 +9,13 @@ def led_ministries(person):
     if not person.is_authenticated:
         return Ministry.objects.none()
     return Ministry.objects.filter(leaderships__person=person).distinct()
+
+
+def led_campuses(person):
+    """Campuses where person is leader OR co-leader — same access level for both."""
+    if not person.is_authenticated:
+        return Campus.objects.none()
+    return Campus.objects.filter(leaderships__person=person).distinct()
 
 
 def general_led_kinds(person):
@@ -19,6 +26,14 @@ def general_led_kinds(person):
     )
 
 
+def can_manage_campus(person, campus) -> bool:
+    if not person.is_authenticated:
+        return False
+    if person.is_manager:
+        return True
+    return campus.leaderships.filter(person=person).exists()
+
+
 def can_manage_ministry(person, ministry) -> bool:
     if not person.is_authenticated:
         return False
@@ -26,16 +41,22 @@ def can_manage_ministry(person, ministry) -> bool:
         return True
     if ministry.kind in general_led_kinds(person):
         return True
-    return ministry.leaderships.filter(person=person).exists()
+    if ministry.leaderships.filter(person=person).exists():
+        return True
+    return can_manage_campus(person, ministry.campus)
 
 
 def scope_ministries(qs, person):
     """Ministries a person may see: everything for a manager, otherwise the ones
-    they lead/co-lead locally plus every ministry of a kind they lead generally."""
+    they lead/co-lead locally plus every ministry of a kind they lead generally,
+    plus every ministry at a campus they lead, plus every ministry they're simply
+    a member of (read access) — same precedent as scope_cells's Q(members=person)."""
     if person.is_manager:
         return qs
     kinds = general_led_kinds(person)
-    condition = Q(leaderships__person=person)
+    condition = (
+        Q(leaderships__person=person) | Q(campus__leaderships__person=person) | Q(members=person)
+    )
     if kinds:
         condition |= Q(kind__in=kinds)
     return qs.filter(condition).distinct()
@@ -67,6 +88,48 @@ class MinistryPermission(BasePermission):
         return can_manage_ministry(request.user, obj)
 
 
+def can_manage_cell(person, cell) -> bool:
+    if not person.is_authenticated:
+        return False
+    if person.is_manager:
+        return True
+    if cell.leaderships.filter(person=person).exists():
+        return True
+    return can_manage_campus(person, cell.campus)
+
+
+def scope_cells(qs, person):
+    """Células a pessoa may see: everything for a manager; otherwise the ones they
+    lead/co-lead plus the ones they're simply a member of (read access), plus every
+    célula at a campus they lead."""
+    if person.is_manager:
+        return qs
+    return qs.filter(
+        Q(leaderships__person=person) | Q(members=person) | Q(campus__leaderships__person=person)
+    ).distinct()
+
+
+class CellPermission(BasePermission):
+    """Read: anyone who can see the célula (queryset already scoped).
+    Create célula / assign leadership: manager only.
+    Update célula fields or manage its members: manager, or a leader/co-leader of it."""
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        # Only the plain "create a new Cell" action is manager-only here — the custom
+        # "members"/"leaderships" actions also arrive as POST/DELETE but are gated by
+        # has_object_permission (can_manage_cell) instead.
+        if view.action == "create":
+            return request.user.is_manager
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return can_manage_cell(request.user, obj)
+
+
 def can_manage_team(person, team) -> bool:
     if not person.is_authenticated:
         return False
@@ -79,7 +142,8 @@ def can_manage_team(person, team) -> bool:
 
 def scope_teams(qs, person):
     """Teams a person may see: everything for a manager; otherwise teams they (or
-    their ministry) lead, plus teams they're simply a member of (read access)."""
+    their ministry) lead, plus teams they're simply a member of (read access), plus
+    teams whose ministry is at a campus they lead."""
     if person.is_manager:
         return qs
     kinds = general_led_kinds(person)
@@ -87,6 +151,7 @@ def scope_teams(qs, person):
         Q(leaderships__person=person)
         | Q(members=person)
         | Q(ministry__leaderships__person=person)
+        | Q(ministry__campus__leaderships__person=person)
     )
     if kinds:
         condition |= Q(ministry__kind__in=kinds)
@@ -102,6 +167,7 @@ def scope_activities(qs, person):
         Q(team__leaderships__person=person)
         | Q(team__members=person)
         | Q(team__ministry__leaderships__person=person)
+        | Q(team__ministry__campus__leaderships__person=person)
     )
     if kinds:
         condition |= Q(team__ministry__kind__in=kinds)

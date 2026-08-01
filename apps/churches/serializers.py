@@ -7,6 +7,9 @@ from .models import (
     Activity,
     ActivityCompletion,
     Campus,
+    CampusLeadership,
+    Cell,
+    CellLeadership,
     Church,
     Ministry,
     MinistryGeneralLeadership,
@@ -42,10 +45,34 @@ class CampusMiniSerializer(serializers.ModelSerializer):
 
 class CampusSerializer(serializers.ModelSerializer):
     church = ChurchSerializer(read_only=True)
+    leaders = serializers.SerializerMethodField()
+    co_leaders = serializers.SerializerMethodField()
 
     class Meta:
         model = Campus
-        fields = ["id", "church", "name", "city"]
+        fields = ["id", "church", "name", "city", "leaders", "co_leaders"]
+
+    def get_leaders(self, obj):
+        return PersonMiniSerializer(obj.leaders(), many=True).data
+
+    def get_co_leaders(self, obj):
+        return PersonMiniSerializer(obj.co_leaders(), many=True).data
+
+
+class CampusLeadershipSerializer(serializers.ModelSerializer):
+    """Read-only representation — creation/removal is handled explicitly in the view
+    (see CampusLeadershipInputSerializer), not through ModelSerializer.create()."""
+
+    person = PersonMiniSerializer(read_only=True)
+
+    class Meta:
+        model = CampusLeadership
+        fields = ["id", "campus", "person", "role"]
+
+
+class CampusLeadershipInputSerializer(serializers.Serializer):
+    person_id = serializers.UUIDField()
+    role = serializers.ChoiceField(choices=LeadershipRole.choices)
 
 
 class MinistryLeadershipSerializer(serializers.ModelSerializer):
@@ -106,6 +133,60 @@ class MinistryMiniSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ministry
         fields = ["id", "name", "kind"]
+
+
+class CellLeadershipSerializer(serializers.ModelSerializer):
+    """Read-only representation — creation/removal is handled explicitly in the view
+    (see CellLeadershipInputSerializer), not through ModelSerializer.create()."""
+
+    person = PersonMiniSerializer(read_only=True)
+
+    class Meta:
+        model = CellLeadership
+        fields = ["id", "cell", "person", "role"]
+
+
+class CellLeadershipInputSerializer(serializers.Serializer):
+    person_id = serializers.UUIDField()
+    role = serializers.ChoiceField(choices=LeadershipRole.choices)
+
+
+class CellMemberSerializer(serializers.Serializer):
+    """Input payload for adding/removing a participant from a célula."""
+
+    person_id = serializers.UUIDField()
+
+
+class CellSerializer(serializers.ModelSerializer):
+    campus = CampusMiniSerializer(read_only=True)
+    campus_id = serializers.PrimaryKeyRelatedField(
+        source="campus", queryset=Campus.objects.all(), write_only=True
+    )
+    leaders = serializers.SerializerMethodField()
+    co_leaders = serializers.SerializerMethodField()
+    member_count = serializers.IntegerField(source="members.count", read_only=True)
+
+    class Meta:
+        model = Cell
+        fields = [
+            "id",
+            "campus",
+            "campus_id",
+            "name",
+            "weekday",
+            "target_audience",
+            "address",
+            "description",
+            "leaders",
+            "co_leaders",
+            "member_count",
+        ]
+
+    def get_leaders(self, obj):
+        return PersonMiniSerializer(obj.leaders(), many=True).data
+
+    def get_co_leaders(self, obj):
+        return PersonMiniSerializer(obj.co_leaders(), many=True).data
 
 
 class TeamLeadershipSerializer(serializers.ModelSerializer):
@@ -220,8 +301,9 @@ class ActivityCompletionInputSerializer(serializers.Serializer):
 
 class MinistryGeneralLeadershipSerializer(serializers.ModelSerializer):
     """Read-only for now — general leadership is assigned via admin/seed in this pass,
-    same as Church/Campus creation (see docs: only local ministry leadership has a
-    write endpoint right now)."""
+    same as Church/Campus creation. Every *local* leadership (Ministry, Cell, Team,
+    Campus) has its own `leaderships` write endpoint — only general leadership
+    remains admin/seed-only."""
 
     leaders = PersonMiniSerializer(many=True, read_only=True)
 

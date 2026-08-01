@@ -1,5 +1,7 @@
 import pytest
 
+from tests.conftest import make_person
+
 pytestmark = pytest.mark.django_db
 
 
@@ -55,3 +57,35 @@ def test_regular_person_only_sees_themselves(api_client, regular_person, leader)
     resp = auth(api_client, regular_person).get("/api/people/")
     ids = [p["id"] for p in resp.data["results"]]
     assert ids == [str(regular_person.id)]
+
+
+def test_manager_can_assign_campus_leadership(api_client, manager, campus, regular_person):
+    resp = auth(api_client, manager).post(
+        f"/api/campuses/{campus.id}/leaderships/", {"person_id": str(regular_person.id), "role": "leader"}
+    )
+    assert resp.status_code == 201
+
+
+def test_non_manager_cannot_assign_campus_leadership(api_client, campus_leader, campus, regular_person):
+    resp = auth(api_client, campus_leader).post(
+        f"/api/campuses/{campus.id}/leaderships/", {"person_id": str(regular_person.id), "role": "leader"}
+    )
+    assert resp.status_code == 403
+
+
+def test_campus_leader_cannot_remove_their_own_leadership(api_client, campus_leader, campus):
+    resp = auth(api_client, campus_leader).delete(f"/api/campuses/{campus.id}/leaderships/{campus_leader.id}/")
+    assert resp.status_code == 403
+
+
+def test_manager_can_remove_a_campus_leadership(api_client, manager, campus_leader, campus):
+    resp = auth(api_client, manager).delete(f"/api/campuses/{campus.id}/leaderships/{campus_leader.id}/")
+    assert resp.status_code == 204
+
+
+def test_campus_leader_sees_people_at_their_campus(api_client, campus_leader, regular_person, other_campus):
+    other_person = make_person(email="outro-campus@ilan.church", name="Outro Campus", campus=other_campus)
+    resp = auth(api_client, campus_leader).get("/api/people/")
+    ids = {p["id"] for p in resp.data["results"]}
+    assert str(regular_person.id) in ids
+    assert str(other_person.id) not in ids

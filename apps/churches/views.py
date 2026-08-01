@@ -12,6 +12,9 @@ from .models import (
     Activity,
     ActivityCompletion,
     Campus,
+    CampusLeadership,
+    Cell,
+    CellLeadership,
     Church,
     Ministry,
     MinistryGeneralLeadership,
@@ -22,11 +25,13 @@ from .models import (
 )
 from .permissions import (
     ActivityPermission,
+    CellPermission,
     MinistryPermission,
     TeamPermission,
     can_manage_ministry,
     can_manage_team,
     scope_activities,
+    scope_cells,
     scope_ministries,
     scope_teams,
 )
@@ -34,7 +39,13 @@ from .serializers import (
     ActivityCompletionInputSerializer,
     ActivityCompletionSerializer,
     ActivitySerializer,
+    CampusLeadershipInputSerializer,
+    CampusLeadershipSerializer,
     CampusSerializer,
+    CellLeadershipInputSerializer,
+    CellLeadershipSerializer,
+    CellMemberSerializer,
+    CellSerializer,
     ChurchSerializer,
     MinistryGeneralLeadershipSerializer,
     MinistryLeadershipInputSerializer,
@@ -63,9 +74,45 @@ class ChurchViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class CampusViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Campus.objects.select_related("church").all()
+    """Creation/editing of a Campus itself stays admin/seed-only (same precedent as
+    Church) — only its leadership is manageable through this API."""
+
+    queryset = Campus.objects.select_related("church").prefetch_related("leaderships__person")
     serializer_class = CampusSerializer
     permission_classes = [IsAuthenticated]
+
+    @action(detail=True, methods=["get", "post"], url_path="leaderships")
+    def leaderships(self, request, pk=None):
+        campus = self.get_object()
+        if request.method == "GET":
+            qs = campus.leaderships.select_related("person")
+            return Response(CampusLeadershipSerializer(qs, many=True).data)
+
+        # Assigning leadership is manager-only — a campus leader cannot promote/
+        # demote themselves or others, same rule as Ministry/Cell/Team leadership.
+        if not request.user.is_manager:
+            raise PermissionDenied("Só o gestor da mega igreja pode atribuir liderança de campus.")
+        serializer = CampusLeadershipInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        person = get_object_or_404(Person, pk=serializer.validated_data["person_id"])
+        leadership, _ = CampusLeadership.objects.update_or_create(
+            campus=campus,
+            person=person,
+            defaults={"role": serializer.validated_data["role"]},
+        )
+        return Response(
+            CampusLeadershipSerializer(leadership).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["delete"], url_path=r"leaderships/(?P<person_id>[0-9a-fA-F-]+)")
+    def remove_leadership(self, request, pk=None, person_id=None):
+        campus = self.get_object()
+        if not request.user.is_manager:
+            raise PermissionDenied("Só o gestor da mega igreja pode remover liderança de campus.")
+        deleted, _ = CampusLeadership.objects.filter(campus=campus, person_id=person_id).delete()
+        if not deleted:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MinistryGeneralLeadershipViewSet(viewsets.ReadOnlyModelViewSet):
@@ -139,6 +186,69 @@ class MinistryViewSet(viewsets.ModelViewSet):
         ministry = self.get_object()  # enforces can_manage_ministry via has_object_permission
         person = get_object_or_404(Person, pk=person_id)
         ministry.members.remove(person)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CellViewSet(viewsets.ModelViewSet):
+    serializer_class = CellSerializer
+    permission_classes = [CellPermission]
+
+    def get_queryset(self):
+        qs = Cell.objects.select_related("campus", "campus__church").prefetch_related(
+            "leaderships__person", "members"
+        )
+        return scope_cells(qs, self.request.user)
+
+    @action(detail=True, methods=["get", "post"], url_path="leaderships")
+    def leaderships(self, request, pk=None):
+        cell = self.get_object()
+        if request.method == "GET":
+            qs = cell.leaderships.select_related("person")
+            return Response(CellLeadershipSerializer(qs, many=True).data)
+
+        # Assigning leadership is manager-only, regardless of can_manage_cell — a
+        # célula leader cannot promote/demote themselves or others.
+        if not request.user.is_manager:
+            raise PermissionDenied("Só o gestor da mega igreja pode atribuir liderança de célula.")
+        serializer = CellLeadershipInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        person = get_object_or_404(Person, pk=serializer.validated_data["person_id"])
+        leadership, _ = CellLeadership.objects.update_or_create(
+            cell=cell,
+            person=person,
+            defaults={"role": serializer.validated_data["role"]},
+        )
+        return Response(
+            CellLeadershipSerializer(leadership).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["delete"], url_path=r"leaderships/(?P<person_id>[0-9a-fA-F-]+)")
+    def remove_leadership(self, request, pk=None, person_id=None):
+        cell = self.get_object()
+        if not request.user.is_manager:
+            raise PermissionDenied("Só o gestor da mega igreja pode remover liderança de célula.")
+        deleted, _ = CellLeadership.objects.filter(cell=cell, person_id=person_id).delete()
+        if not deleted:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["get", "post"], url_path="members")
+    def members(self, request, pk=None):
+        cell = self.get_object()  # enforces can_manage_cell for POST via has_object_permission
+        if request.method == "GET":
+            return Response(PersonMiniSerializer(cell.members.all(), many=True).data)
+
+        serializer = CellMemberSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        person = get_object_or_404(Person, pk=serializer.validated_data["person_id"])
+        cell.members.add(person)
+        return Response(PersonMiniSerializer(cell.members.all(), many=True).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["delete"], url_path=r"members/(?P<person_id>[0-9a-fA-F-]+)")
+    def remove_member(self, request, pk=None, person_id=None):
+        cell = self.get_object()  # enforces can_manage_cell via has_object_permission
+        person = get_object_or_404(Person, pk=person_id)
+        cell.members.remove(person)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

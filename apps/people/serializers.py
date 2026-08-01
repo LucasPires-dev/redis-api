@@ -1,8 +1,9 @@
 from django.db.models import Sum
 from rest_framework import serializers
 
-from apps.churches.models import ActivityCompletion, Campus, Ministry, Team
-from apps.churches.permissions import general_led_kinds, led_ministries
+from apps.churches.choices import MinistryKind
+from apps.churches.models import ActivityCompletion, Campus, Cell, Ministry, Team
+from apps.churches.permissions import general_led_kinds, led_campuses, led_ministries
 
 from .models import Person
 
@@ -35,6 +36,12 @@ class TeamMiniSerializer(serializers.ModelSerializer):
     class Meta:
         model = Team
         fields = ["id", "name", "ministry"]
+
+
+class CellMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cell
+        fields = ["id", "name", "campus"]
 
 
 class PersonSerializer(serializers.ModelSerializer):
@@ -88,6 +95,9 @@ class MeSerializer(serializers.ModelSerializer):
     led_ministries = serializers.SerializerMethodField()
     general_led_kinds = serializers.SerializerMethodField()
     led_teams = serializers.SerializerMethodField()
+    led_cells = serializers.SerializerMethodField()
+    led_campuses = serializers.SerializerMethodField()
+    is_reconciliador = serializers.SerializerMethodField()
     total_points = serializers.SerializerMethodField()
 
     class Meta:
@@ -103,6 +113,9 @@ class MeSerializer(serializers.ModelSerializer):
             "led_ministries",
             "general_led_kinds",
             "led_teams",
+            "led_cells",
+            "led_campuses",
+            "is_reconciliador",
             "total_points",
         ]
 
@@ -114,6 +127,18 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_led_teams(self, obj):
         return TeamMiniSerializer(Team.objects.filter(leaderships__person=obj).distinct(), many=True).data
+
+    def get_led_cells(self, obj):
+        return CellMiniSerializer(Cell.objects.filter(leaderships__person=obj).distinct(), many=True).data
+
+    def get_led_campuses(self, obj):
+        return CampusMiniSerializer(led_campuses(obj), many=True).data
+
+    def get_is_reconciliador(self, obj):
+        # True for a rank-and-file reconciliador too (a plain Ministry.members
+        # entry, no leadership row) — this is how the frontend distinguishes
+        # "serves in Reconciliação" from "leads Reconciliação" for nav/UI purposes.
+        return Ministry.objects.filter(kind=MinistryKind.RECONCILIACAO, members=obj).exists()
 
     def get_total_points(self, obj):
         return personal_total_points(obj)

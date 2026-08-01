@@ -3,7 +3,16 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from apps.churches.choices import ActivityKind, LeadershipRole, MinistryKind
-from apps.churches.models import Activity, Campus, Church, Ministry, MinistryLeadership, Team, TeamLeadership
+from apps.churches.models import (
+    Activity,
+    Campus,
+    CampusLeadership,
+    Church,
+    Ministry,
+    MinistryLeadership,
+    Team,
+    TeamLeadership,
+)
 
 Person = get_user_model()
 
@@ -70,6 +79,41 @@ def regular_person(campus):
 
 
 @pytest.fixture
+def campus_leader(campus):
+    person = make_person(email="leandro@ilan.church", name="Leandro", campus=campus)
+    CampusLeadership.objects.create(campus=campus, person=person, role=LeadershipRole.LEADER)
+    return person
+
+
+@pytest.fixture
+def campus_co_leader(campus):
+    person = make_person(email="ana-paula@ilan.church", name="Ana Paula", campus=campus)
+    CampusLeadership.objects.create(campus=campus, person=person, role=LeadershipRole.CO_LEADER)
+    return person
+
+
+@pytest.fixture
+def reconciliacao_ministry(campus):
+    return Ministry.objects.create(campus=campus, kind=MinistryKind.RECONCILIACAO, name="Reconciliação")
+
+
+@pytest.fixture
+def reconciliador(campus, reconciliacao_ministry):
+    person = make_person(email="reconciliador@ilan.church", name="Reconciliador", campus=campus)
+    reconciliacao_ministry.members.add(person)
+    return person
+
+
+@pytest.fixture
+def pending_lead(db):
+    from apps.reconciliation.models import ReconciliationLead
+
+    return ReconciliationLead.objects.create(
+        name="Novo Convertido", phone="11999999999", email="convertido@example.com", dedup_key="dedup-1"
+    )
+
+
+@pytest.fixture
 def team(brave):
     team = Team.objects.create(ministry=brave, name="Equipe Louvor")
     return team
@@ -103,3 +147,36 @@ def eventual_activity(team, team_leader):
     return Activity.objects.create(
         team=team, title="Retiro", kind=ActivityKind.EVENTUAL, points=50, created_by=team_leader
     )
+
+
+@pytest.fixture
+def jovens_ministry(campus):
+    """Ministério de público (cria Eventos) usado pelos testes de apps.production."""
+    return Ministry.objects.create(campus=campus, kind=MinistryKind.JOVENS, name="Jovens")
+
+
+@pytest.fixture
+def jovens_leader(campus, jovens_ministry):
+    person = make_person(email="lider-jovens@ilan.church", name="Líder de Jovens", campus=campus)
+    MinistryLeadership.objects.create(ministry=jovens_ministry, person=person, role=LeadershipRole.LEADER)
+    return person
+
+
+@pytest.fixture
+def media_ministry(campus):
+    """Ministério técnico/produção (recebe Demand) usado pelos testes de apps.production."""
+    return Ministry.objects.create(campus=campus, kind=MinistryKind.MEDIA, name="Mídia")
+
+
+@pytest.fixture
+def media_leader(campus, media_ministry):
+    person = make_person(email="lider-midia@ilan.church", name="Líder de Mídia", campus=campus)
+    MinistryLeadership.objects.create(ministry=media_ministry, person=person, role=LeadershipRole.LEADER)
+    return person
+
+
+@pytest.fixture
+def media_member(campus, media_ministry):
+    person = make_person(email="membro-midia@ilan.church", name="Membro de Mídia", campus=campus)
+    media_ministry.members.add(person)
+    return person

@@ -27,6 +27,8 @@ INSTALLED_APPS = [
     "django_filters",
     "apps.people",
     "apps.churches",
+    "apps.reconciliation",
+    "apps.production",
 ]
 
 MIDDLEWARE = [
@@ -88,6 +90,14 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
+
+# Reconciliação: service-account read access to the Google Sheet fed by the
+# "novo convertido" Google Form. GOOGLE_SHEETS_CREDENTIALS_JSON is the service
+# account key JSON, base64-encoded (survives ephemeral-filesystem hosting the
+# same way SECRET_KEY/DATABASE_URL already do — no file to mount).
+GOOGLE_SHEETS_CREDENTIALS_JSON = config("GOOGLE_SHEETS_CREDENTIALS_JSON", default="")
+GOOGLE_SHEETS_SPREADSHEET_ID = config("GOOGLE_SHEETS_SPREADSHEET_ID", default="")
+GOOGLE_SHEETS_RANGE = config("GOOGLE_SHEETS_RANGE", default="Respostas ao formulário 1!A:Z")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (

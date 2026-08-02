@@ -1,7 +1,7 @@
 import pytest
 from django.utils import timezone
 
-from apps.production.models import Demand, Event, RundownItem, RundownItemStatus
+from apps.production.models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
 
 pytestmark = pytest.mark.django_db
 
@@ -205,3 +205,133 @@ def test_event_rundown_nested_in_response(api_client, jovens_leader, campus, jov
     assert resp.status_code == 200
     assert len(resp.data["rundown_items"]) == 1
     assert resp.data["rundown_items"][0]["title"] == "Abertura"
+
+
+def _event_for_roster(campus, jovens_leader):
+    return Event.objects.create(
+        title="Retiro de Jovens", campus=campus, ministry_kind="jovens", starts_at=timezone.now(),
+        created_by=jovens_leader,
+    )
+
+
+def test_ministry_leader_can_invite_member_to_roster(
+    api_client, media_leader, media_ministry, media_member, campus, jovens_leader, jovens_ministry
+):
+    event = _event_for_roster(campus, jovens_leader)
+    resp = auth(api_client, media_leader).post(
+        "/api/production-roster-entries/",
+        {
+            "event_id": str(event.id),
+            "ministry_id": str(media_ministry.id),
+            "person_id": str(media_member.id),
+            "function": "Câmera 2",
+        },
+    )
+    assert resp.status_code == 201
+    entry = EventRosterEntry.objects.get()
+    assert entry.status == "invited"
+    assert entry.invited_by_id == media_leader.id
+
+
+def test_regular_person_cannot_invite_to_roster(
+    api_client, regular_person, media_ministry, campus, jovens_leader, jovens_ministry, media_member
+):
+    event = _event_for_roster(campus, jovens_leader)
+    resp = auth(api_client, regular_person).post(
+        "/api/production-roster-entries/",
+        {
+            "event_id": str(event.id),
+            "ministry_id": str(media_ministry.id),
+            "person_id": str(media_member.id),
+        },
+    )
+    assert resp.status_code == 403
+    assert not EventRosterEntry.objects.exists()
+
+
+def test_invitee_can_confirm_own_entry(
+    api_client, media_leader, media_ministry, media_member, campus, jovens_leader, jovens_ministry
+):
+    event = _event_for_roster(campus, jovens_leader)
+    entry = EventRosterEntry.objects.create(
+        event=event, ministry=media_ministry, person=media_member, invited_by=media_leader
+    )
+    resp = auth(api_client, media_member).post(f"/api/production-roster-entries/{entry.id}/confirm/")
+    assert resp.status_code == 200
+    entry.refresh_from_db()
+    assert entry.status == "confirmed"
+    assert entry.responded_at is not None
+
+
+def test_other_person_cannot_confirm_someone_elses_entry(
+    api_client, regular_person, media_leader, media_ministry, media_member, campus, jovens_leader, jovens_ministry
+):
+    """regular_person has no relation to the event at all (not a member of
+    jovens/media, not a campus leader) — scope_events hides it before the
+    permission check even runs, so this 404s rather than 403s, same convention
+    as apps.reconciliation's visibility tests."""
+    event = _event_for_roster(campus, jovens_leader)
+    entry = EventRosterEntry.objects.create(
+        event=event, ministry=media_ministry, person=media_member, invited_by=media_leader
+    )
+    resp = auth(api_client, regular_person).post(f"/api/production-roster-entries/{entry.id}/confirm/")
+    assert resp.status_code == 404
+    entry.refresh_from_db()
+    assert entry.status == "invited"
+
+
+def test_ministry_leader_can_decline_on_behalf_of_member(
+    api_client, media_leader, media_ministry, media_member, campus, jovens_leader, jovens_ministry
+):
+    event = _event_for_roster(campus, jovens_leader)
+    entry = EventRosterEntry.objects.create(
+        event=event, ministry=media_ministry, person=media_member, invited_by=media_leader
+    )
+    resp = auth(api_client, media_leader).post(f"/api/production-roster-entries/{entry.id}/decline/")
+    assert resp.status_code == 200
+    entry.refresh_from_db()
+    assert entry.status == "declined"
+
+
+def test_media_member_can_create_checklist_item_for_own_ministry(
+    api_client, media_member, campus, jovens_leader, jovens_ministry
+):
+    event = _event_for_roster(campus, jovens_leader)
+    resp = auth(api_client, media_member).post(
+        "/api/production-checklist-items/",
+        {"event_id": str(event.id), "ministry_kind": "media", "text": "Testar projetor"},
+    )
+    assert resp.status_code == 201
+    assert EventChecklistItem.objects.filter(event=event, text="Testar projetor").exists()
+
+
+def test_unrelated_person_cannot_create_checklist_item(
+    api_client, regular_person, campus, jovens_leader, jovens_ministry
+):
+    event = _event_for_roster(campus, jovens_leader)
+    resp = auth(api_client, regular_person).post(
+        "/api/production-checklist-items/",
+        {"event_id": str(event.id), "ministry_kind": "media", "text": "Testar projetor"},
+    )
+    assert resp.status_code == 403
+
+
+def test_toggle_checklist_item_sets_and_clears_done_by(
+    api_client, media_member, campus, jovens_leader, jovens_ministry
+):
+    event = _event_for_roster(campus, jovens_leader)
+    item = EventChecklistItem.objects.create(event=event, ministry_kind="media", text="Testar projetor")
+
+    resp = auth(api_client, media_member).post(f"/api/production-checklist-items/{item.id}/toggle/")
+    assert resp.status_code == 200
+    item.refresh_from_db()
+    assert item.is_done is True
+    assert item.done_by_id == media_member.id
+    assert item.done_at is not None
+
+    resp = auth(api_client, media_member).post(f"/api/production-checklist-items/{item.id}/toggle/")
+    assert resp.status_code == 200
+    item.refresh_from_db()
+    assert item.is_done is False
+    assert item.done_by_id is None
+    assert item.done_at is None

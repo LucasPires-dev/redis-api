@@ -39,3 +39,9 @@ class DemandStatus(models.TextChoices):
     IN_PROGRESS = "in_progress", "Em andamento"
     DONE = "done", "Concluída"
     REJECTED = "rejected", "Recusada"
+
+
+class RosterStatus(models.TextChoices):
+    INVITED = "invited", "Convidado"
+    CONFIRMED = "confirmed", "Confirmado"
+    DECLINED = "declined", "Recusado"

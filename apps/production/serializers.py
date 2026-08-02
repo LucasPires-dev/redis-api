@@ -2,10 +2,10 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from apps.churches.choices import PRODUCTION_MINISTRY_KINDS, MinistryKind
-from apps.churches.models import Campus
+from apps.churches.models import Campus, Ministry
 
 from .choices import ItemStatus
-from .models import Demand, Event, RundownItem, RundownItemStatus
+from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
 
 Person = get_user_model()
 
@@ -17,6 +17,14 @@ class ProductionCampusMiniSerializer(serializers.ModelSerializer):
     class Meta:
         model = Campus
         fields = ["id", "name", "city"]
+
+
+class ProductionMinistryMiniSerializer(serializers.ModelSerializer):
+    """Local, read-only — mesmo racional de ProductionCampusMiniSerializer."""
+
+    class Meta:
+        model = Ministry
+        fields = ["id", "name", "kind"]
 
 
 class RundownItemStatusSerializer(serializers.ModelSerializer):
@@ -138,3 +146,41 @@ class DemandSerializer(serializers.ModelSerializer):
 
 class RejectDemandInputSerializer(serializers.Serializer):
     rejection_reason = serializers.CharField(allow_blank=True, required=False, default="")
+
+
+class EventRosterEntrySerializer(serializers.ModelSerializer):
+    ministry = ProductionMinistryMiniSerializer(read_only=True)
+    ministry_id = serializers.PrimaryKeyRelatedField(
+        queryset=Ministry.objects.all(), source="ministry", write_only=True
+    )
+    person = DemandPersonMiniSerializer(read_only=True)
+    person_id = serializers.PrimaryKeyRelatedField(
+        queryset=Person.objects.all(), source="person", write_only=True
+    )
+    event_id = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all(), source="event", write_only=True)
+
+    class Meta:
+        model = EventRosterEntry
+        fields = [
+            "id",
+            "event_id",
+            "ministry",
+            "ministry_id",
+            "person",
+            "person_id",
+            "function",
+            "status",
+            "responded_at",
+            "created_at",
+        ]
+        read_only_fields = ["status", "responded_at", "created_at"]
+
+
+class EventChecklistItemSerializer(serializers.ModelSerializer):
+    done_by = DemandPersonMiniSerializer(read_only=True)
+    event_id = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all(), source="event", write_only=True)
+
+    class Meta:
+        model = EventChecklistItem
+        fields = ["id", "event_id", "ministry_kind", "text", "is_done", "done_by", "done_at", "created_at"]
+        read_only_fields = ["is_done", "done_by", "done_at", "created_at"]

@@ -14,6 +14,7 @@ from .permissions import (
     scope_demands,
     scope_events,
 )
+from .realtime import broadcast_event_update
 from .serializers import (
     DemandSerializer,
     EventChecklistItemSerializer,
@@ -51,6 +52,10 @@ class RundownItemViewSet(viewsets.ModelViewSet):
             qs = qs.filter(event_id=event_id)
         return qs.filter(event__in=scope_events(Event.objects.all(), self.request.user))
 
+    def perform_create(self, serializer):
+        item = serializer.save()
+        broadcast_event_update(item.event_id, "rundown_item")
+
     @action(detail=True, methods=["post"], url_path="set-status")
     def set_status(self, request, pk=None):
         item = self.get_object()  # has_object_permission -> can_report_item_status
@@ -65,6 +70,7 @@ class RundownItemViewSet(viewsets.ModelViewSet):
             },
         )
         item.refresh_from_db()
+        broadcast_event_update(item.event_id, "rundown_item_status")
         return Response(RundownItemSerializer(item).data)
 
 
@@ -81,13 +87,17 @@ class DemandViewSet(viewsets.ModelViewSet):
         return scope_demands(qs, self.request.user, direction=direction)
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user, status=DemandStatus.OPEN)
+        demand = serializer.save(created_by=self.request.user, status=DemandStatus.OPEN)
+        if demand.event_id:
+            broadcast_event_update(demand.event_id, "demand")
 
     @action(detail=True, methods=["post"], url_path="accept")
     def accept(self, request, pk=None):
         demand = self.get_object()  # has_object_permission -> can_manage_demand_target
         demand.status = DemandStatus.IN_PROGRESS
         demand.save(update_fields=["status", "updated_at"])
+        if demand.event_id:
+            broadcast_event_update(demand.event_id, "demand")
         return Response(DemandSerializer(demand).data)
 
     @action(detail=True, methods=["post"], url_path="complete")
@@ -95,6 +105,8 @@ class DemandViewSet(viewsets.ModelViewSet):
         demand = self.get_object()
         demand.status = DemandStatus.DONE
         demand.save(update_fields=["status", "updated_at"])
+        if demand.event_id:
+            broadcast_event_update(demand.event_id, "demand")
         return Response(DemandSerializer(demand).data)
 
     @action(detail=True, methods=["post"], url_path="reject")
@@ -105,6 +117,8 @@ class DemandViewSet(viewsets.ModelViewSet):
         demand.status = DemandStatus.REJECTED
         demand.rejection_reason = serializer.validated_data["rejection_reason"]
         demand.save(update_fields=["status", "rejection_reason", "updated_at"])
+        if demand.event_id:
+            broadcast_event_update(demand.event_id, "demand")
         return Response(DemandSerializer(demand).data)
 
 
@@ -120,7 +134,8 @@ class EventRosterEntryViewSet(viewsets.ModelViewSet):
         return qs.filter(event__in=scope_events(Event.objects.all(), self.request.user))
 
     def perform_create(self, serializer):
-        serializer.save(invited_by=self.request.user)
+        entry = serializer.save(invited_by=self.request.user)
+        broadcast_event_update(entry.event_id, "roster_entry")
 
     @action(detail=True, methods=["post"], url_path="confirm")
     def confirm(self, request, pk=None):
@@ -128,6 +143,7 @@ class EventRosterEntryViewSet(viewsets.ModelViewSet):
         entry.status = RosterStatus.CONFIRMED
         entry.responded_at = timezone.now()
         entry.save(update_fields=["status", "responded_at"])
+        broadcast_event_update(entry.event_id, "roster_entry")
         return Response(EventRosterEntrySerializer(entry).data)
 
     @action(detail=True, methods=["post"], url_path="decline")
@@ -136,6 +152,7 @@ class EventRosterEntryViewSet(viewsets.ModelViewSet):
         entry.status = RosterStatus.DECLINED
         entry.responded_at = timezone.now()
         entry.save(update_fields=["status", "responded_at"])
+        broadcast_event_update(entry.event_id, "roster_entry")
         return Response(EventRosterEntrySerializer(entry).data)
 
 
@@ -151,7 +168,8 @@ class EventChecklistItemViewSet(viewsets.ModelViewSet):
         return qs.filter(event__in=scope_events(Event.objects.all(), self.request.user))
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        item = serializer.save(created_by=self.request.user)
+        broadcast_event_update(item.event_id, "checklist_item")
 
     @action(detail=True, methods=["post"], url_path="toggle")
     def toggle(self, request, pk=None):
@@ -160,4 +178,5 @@ class EventChecklistItemViewSet(viewsets.ModelViewSet):
         item.done_by = request.user if item.is_done else None
         item.done_at = timezone.now() if item.is_done else None
         item.save(update_fields=["is_done", "done_by", "done_at"])
+        broadcast_event_update(item.event_id, "checklist_item")
         return Response(EventChecklistItemSerializer(item).data)

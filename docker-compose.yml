@@ -1,0 +1,39 @@
+x-env: &env
+  env_file:
+    - .env
+  environment:
+    DJANGO_SETTINGS_MODULE: config.settings.development
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+  depends_on:
+    - redis
+  volumes:
+    - .:/app
+
+services:
+  app:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8001:8000"
+    <<: *env
+
+  worker:
+    build: .
+    command: celery -A config worker -l info
+    <<: *env
+
+  beat:
+    build: .
+    command: celery -A config beat -l info
+    <<: *env
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

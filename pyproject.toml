@@ -17,7 +17,13 @@ dependencies = [
     "psycopg[binary] (>=3.3.4,<4.0.0)",
     "django-filter (>=26.1,<27.0)",
     "google-api-python-client (>=2.100,<3.0)",
-    "google-auth (>=2.30,<3.0)"
+    "google-auth (>=2.30,<3.0)",
+    "channels (>=4.1,<5.0)",
+    "channels-redis (>=4.2,<5.0)",
+    "daphne (>=4.1,<5.0)",
+    "redis (>=5.0,<6.0)",
+    "celery (>=5.4,<6.0)",
+    "whitenoise (>=6.7,<7.0)"
 ]
 
 
@@ -31,7 +37,8 @@ dev = [
     "pytest-django (>=4.12.0,<5.0.0)",
     "black (>=26.5.1,<27.0.0)",
     "isort (>=8.0.1,<9.0.0)",
-    "flake8 (>=7.3.0,<8.0.0)"
+    "flake8 (>=7.3.0,<8.0.0)",
+    "pytest-asyncio (>=1.4.0,<2.0.0)"
 ]
 
 [tool.pytest.ini_options]

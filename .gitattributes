@@ -1,0 +1,4 @@
+# docker-entrypoint.sh roda dentro de um container Linux — CRLF (o padrão do
+# Windows via core.autocrlf) quebra o shebang/interpretador shell. Força LF
+# independente da configuração local de quem faz checkout.
+*.sh text eol=lf

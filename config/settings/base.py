@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -13,12 +14,15 @@ ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="", cast=Csv())
 AUTH_USER_MODEL = "people.Person"
 
 INSTALLED_APPS = [
+    "daphne",  # precisa vir antes de django.contrib.staticfiles (convenção Channels: substitui
+    # o runserver padrão por um que também serve WebSocket em dev)
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "channels",
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
@@ -34,6 +38,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -60,6 +65,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "config.wsgi.application"
+ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {
     "default": dj_database_url.parse(
@@ -86,10 +92,31 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
+
+# Redis: camada de canais do Channels (WebSocket) e broker/result backend do Celery — índices
+# de DB diferentes (0 e 1) na mesma instância pra não misturar as duas filas. Default aponta
+# pro Redis local (fora de Docker); docker-compose.yml/swarm-stack.yml sobrescrevem para o
+# hostname do serviço `redis` dentro da rede do container.
+REDIS_URL = config("REDIS_URL", default="redis://127.0.0.1:6379/0")
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [REDIS_URL]},
+    }
+}
+
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://127.0.0.1:6379/1")
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_TASK_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
 
 # Reconciliação: service-account read access to the Google Sheet fed by the
 # "novo convertido" Google Form. GOOGLE_SHEETS_CREDENTIALS_JSON is the service
@@ -98,6 +125,15 @@ CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
 GOOGLE_SHEETS_CREDENTIALS_JSON = config("GOOGLE_SHEETS_CREDENTIALS_JSON", default="")
 GOOGLE_SHEETS_SPREADSHEET_ID = config("GOOGLE_SHEETS_SPREADSHEET_ID", default="")
 GOOGLE_SHEETS_RANGE = config("GOOGLE_SHEETS_RANGE", default="Respostas ao formulário 1!A:Z")
+
+# Substitui o `python manage.py sync_reconciliation_leads` manual por uma execução periódica
+# via Celery Beat — a task só chama o mesmo management command (nenhuma lógica duplicada).
+CELERY_BEAT_SCHEDULE = {
+    "sync-reconciliation-leads": {
+        "task": "apps.reconciliation.tasks.sync_reconciliation_leads",
+        "schedule": crontab(minute="*/15"),
+    },
+}
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (

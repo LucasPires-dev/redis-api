@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+.pytest_cache/
+db.sqlite3
+staticfiles/
+.env
+.venv/
+*.egg-info/
+Dockerfile
+docker-compose.yml
+swarm-stack.yml
+Makefile
+README.md

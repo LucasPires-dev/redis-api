@@ -1,0 +1,91 @@
+# Deploy: docker stack deploy -c swarm-stack.yml redis-api
+# Variáveis (${VAR}) são resolvidas pelo Docker CLI a partir de um .env no
+# diretório atual ou do ambiente do shell — `docker stack deploy` NÃO suporta
+# a chave `env_file:` (só docker compose suporta), por isso os segredos vêm
+# via `environment:` com interpolação.
+
+x-image: &image ${IMAGE:-redis-api}:${TAG:-latest}
+
+x-env: &env
+  SECRET_KEY: ${SECRET_KEY}
+  DEBUG: ${DEBUG:-False}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+  DATABASE_URL: ${DATABASE_URL}
+  DB_CONN_MAX_AGE: ${DB_CONN_MAX_AGE:-0}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+  GOOGLE_SHEETS_CREDENTIALS_JSON: ${GOOGLE_SHEETS_CREDENTIALS_JSON:-}
+  GOOGLE_SHEETS_SPREADSHEET_ID: ${GOOGLE_SHEETS_SPREADSHEET_ID:-}
+  GOOGLE_SHEETS_RANGE: ${GOOGLE_SHEETS_RANGE:-}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  DJANGO_SETTINGS_MODULE: config.settings.production
+
+services:
+  app:
+    image: *image
+    command: ["daphne", "-b", "0.0.0.0", "-p", "8000", "config.asgi:application"]
+    environment: *env
+    networks:
+      - redis-api-net
+      # - eleveia-shared  # TODO: descomentar se este stack roda no mesmo Swarm/Traefik da org
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/schema/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.redis-api.rule=Host(`TODO-dominio-da-api.exemplo.com`)"
+        - "traefik.http.routers.redis-api.entrypoints=websecure"
+        - "traefik.http.routers.redis-api.tls.certresolver=letsencrypt"
+        - "traefik.http.services.redis-api.loadbalancer.server.port=8000"
+
+  worker:
+    image: *image
+    command: ["celery", "-A", "config", "worker", "-l", "info"]
+    environment: *env
+    networks:
+      - redis-api-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  beat:
+    image: *image
+    command: ["celery", "-A", "config", "beat", "-l", "info"]
+    environment: *env
+    networks:
+      - redis-api-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_api_redis_data:/data
+    networks:
+      - redis-api-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  redis-api-net:
+    driver: overlay
+    # Sem "internal: true" — a API precisa alcançar o Supabase externamente
+    # (mesma lição documentada no deploy do nicodemus-adm: "internal: true" na
+    # rede overlay bloqueia acesso à internet).
+  # eleveia-shared:
+  #   external: true  # TODO: descomentar se este projeto compartilha rede/Traefik com outros stacks da org
+
+volumes:
+  redis_api_redis_data:

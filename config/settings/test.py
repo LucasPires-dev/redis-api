@@ -11,3 +11,9 @@ DATABASES = {
 }
 
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
+# Testes não dependem de um Redis real rodando: camada de canais em memória, e
+# tasks do Celery executam inline (sem precisar de worker/broker).
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES = True

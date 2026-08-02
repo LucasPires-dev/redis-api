@@ -1,18 +1,23 @@
+from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .choices import DemandStatus
-from .models import Demand, Event, RundownItem, RundownItemStatus
+from .choices import DemandStatus, RosterStatus
+from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
 from .permissions import (
     DemandPermission,
+    EventChecklistItemPermission,
     EventPermission,
+    EventRosterEntryPermission,
     RundownItemPermission,
     scope_demands,
     scope_events,
 )
 from .serializers import (
     DemandSerializer,
+    EventChecklistItemSerializer,
+    EventRosterEntrySerializer,
     EventSerializer,
     RejectDemandInputSerializer,
     RundownItemSerializer,
@@ -101,3 +106,58 @@ class DemandViewSet(viewsets.ModelViewSet):
         demand.rejection_reason = serializer.validated_data["rejection_reason"]
         demand.save(update_fields=["status", "rejection_reason", "updated_at"])
         return Response(DemandSerializer(demand).data)
+
+
+class EventRosterEntryViewSet(viewsets.ModelViewSet):
+    serializer_class = EventRosterEntrySerializer
+    permission_classes = [EventRosterEntryPermission]
+
+    def get_queryset(self):
+        qs = EventRosterEntry.objects.select_related("ministry", "person", "event")
+        event_id = self.request.query_params.get("event")
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return qs.filter(event__in=scope_events(Event.objects.all(), self.request.user))
+
+    def perform_create(self, serializer):
+        serializer.save(invited_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="confirm")
+    def confirm(self, request, pk=None):
+        entry = self.get_object()  # has_object_permission -> can_respond_roster_entry
+        entry.status = RosterStatus.CONFIRMED
+        entry.responded_at = timezone.now()
+        entry.save(update_fields=["status", "responded_at"])
+        return Response(EventRosterEntrySerializer(entry).data)
+
+    @action(detail=True, methods=["post"], url_path="decline")
+    def decline(self, request, pk=None):
+        entry = self.get_object()
+        entry.status = RosterStatus.DECLINED
+        entry.responded_at = timezone.now()
+        entry.save(update_fields=["status", "responded_at"])
+        return Response(EventRosterEntrySerializer(entry).data)
+
+
+class EventChecklistItemViewSet(viewsets.ModelViewSet):
+    serializer_class = EventChecklistItemSerializer
+    permission_classes = [EventChecklistItemPermission]
+
+    def get_queryset(self):
+        qs = EventChecklistItem.objects.select_related("event", "done_by")
+        event_id = self.request.query_params.get("event")
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return qs.filter(event__in=scope_events(Event.objects.all(), self.request.user))
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="toggle")
+    def toggle(self, request, pk=None):
+        item = self.get_object()  # has_object_permission -> can_manage_checklist_item
+        item.is_done = not item.is_done
+        item.done_by = request.user if item.is_done else None
+        item.done_at = timezone.now() if item.is_done else None
+        item.save(update_fields=["is_done", "done_by", "done_at"])
+        return Response(EventChecklistItemSerializer(item).data)

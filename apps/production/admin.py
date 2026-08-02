@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Demand, Event, RundownItem, RundownItemStatus
+from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
 
 
 class RundownItemInline(admin.TabularInline):
@@ -42,3 +42,17 @@ class DemandAdmin(admin.ModelAdmin):
     ]
     list_filter = ["status", "priority", "demand_type", "to_ministry_kind", "from_ministry_kind"]
     autocomplete_fields = ["event", "from_campus", "to_campus", "created_by"]
+
+
+@admin.register(EventRosterEntry)
+class EventRosterEntryAdmin(admin.ModelAdmin):
+    list_display = ["person", "ministry", "event", "function", "status"]
+    list_filter = ["status", "ministry"]
+    autocomplete_fields = ["event", "ministry", "person", "invited_by"]
+
+
+@admin.register(EventChecklistItem)
+class EventChecklistItemAdmin(admin.ModelAdmin):
+    list_display = ["text", "event", "ministry_kind", "is_done"]
+    list_filter = ["ministry_kind", "is_done"]
+    autocomplete_fields = ["event", "done_by", "created_by"]

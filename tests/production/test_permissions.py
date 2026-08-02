@@ -7,10 +7,12 @@ from apps.production.choices import DemandType
 from apps.production.models import Demand, Event
 from apps.production.permissions import (
     can_create_event,
+    can_manage_checklist_item,
     can_manage_demand_source,
     can_manage_demand_target,
     can_manage_event,
     can_report_item_status,
+    can_respond_roster_entry,
     scope_demands,
     scope_events,
 )
@@ -126,3 +128,27 @@ def test_scope_demands_received_only_shows_target_side(jovens_leader, media_lead
     assert set(scope_demands(Demand.objects.all(), media_leader, direction="received")) == {demand}
     assert set(scope_demands(Demand.objects.all(), jovens_leader, direction="received")) == set()
     assert set(scope_demands(Demand.objects.all(), jovens_leader, direction="sent")) == {demand}
+
+
+def test_can_respond_roster_entry_allows_invitee_and_ministry_manager(
+    jovens_leader, media_leader, media_ministry, media_member, campus, regular_person
+):
+    from apps.production.models import EventRosterEntry
+
+    event = _event(campus=campus, ministry_kind=MinistryKind.JOVENS)
+    entry = EventRosterEntry.objects.create(event=event, ministry=media_ministry, person=media_member)
+    assert can_respond_roster_entry(media_member, entry)  # o próprio convidado
+    assert can_respond_roster_entry(media_leader, entry)  # líder do ministério
+    assert not can_respond_roster_entry(regular_person, entry)
+    assert not can_respond_roster_entry(jovens_leader, entry)  # líder de outro ministério
+
+
+def test_can_manage_checklist_item_matches_can_report_item_status_rule(
+    media_member, regular_person, campus, jovens_ministry
+):
+    from apps.production.models import EventChecklistItem
+
+    event = _event(campus=campus, ministry_kind=MinistryKind.JOVENS)
+    item = EventChecklistItem.objects.create(event=event, ministry_kind=MinistryKind.MEDIA, text="Testar projetor")
+    assert can_manage_checklist_item(media_member, item)
+    assert not can_manage_checklist_item(regular_person, item)

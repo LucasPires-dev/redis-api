@@ -5,7 +5,15 @@ from django.db import models
 
 from apps.churches.choices import MinistryKind
 
-from .choices import DemandPriority, DemandStatus, DemandType, EventStatus, EventType, ItemStatus
+from .choices import (
+    DemandPriority,
+    DemandStatus,
+    DemandType,
+    EventStatus,
+    EventType,
+    ItemStatus,
+    RosterStatus,
+)
 
 
 class Event(models.Model):
@@ -123,3 +131,54 @@ class Demand(models.Model):
 
     def __str__(self):
         return f"{self.from_ministry_kind} → {self.to_ministry_kind}: {self.demand_type} ({self.get_status_display()})"
+
+
+class EventRosterEntry(models.Model):
+    """Quem serve num Evento. Liga a um `Ministry` específico (campus-bound), não
+    só a um `ministry_kind` — o convite vem da lista de membros daquele Ministry
+    (Ministry.members), igual ao picker de apps.reconciliation."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="roster_entries")
+    ministry = models.ForeignKey("churches.Ministry", on_delete=models.CASCADE, related_name="+")
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    function = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=16, choices=RosterStatus.choices, default=RosterStatus.INVITED)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    responded_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["event", "ministry", "person"], name="unique_roster_entry"),
+        ]
+
+    def __str__(self):
+        return f"{self.person} — {self.ministry} ({self.get_status_display()})"
+
+
+class EventChecklistItem(models.Model):
+    """Item de checklist pré-evento, ad-hoc por ministério — sem template por
+    enquanto (Fase 3/4)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="checklist_items")
+    ministry_kind = models.CharField(max_length=32, choices=MinistryKind.choices)
+    text = models.CharField(max_length=255)
+    is_done = models.BooleanField(default=False)
+    done_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    done_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.text} ({self.get_ministry_kind_display()})"

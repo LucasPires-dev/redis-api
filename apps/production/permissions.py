@@ -3,7 +3,7 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from apps.churches.choices import PRODUCTION_MINISTRY_KINDS
 from apps.churches.models import Ministry
-from apps.churches.permissions import can_manage_campus, general_led_kinds
+from apps.churches.permissions import can_manage_campus, can_manage_ministry, general_led_kinds
 
 
 def _local_ministry_leader(person, kind, campus) -> bool:
@@ -55,15 +55,31 @@ def can_create_event(person, ministry_kind, campus) -> bool:
     return ministry_kind in general_led_kinds(person) or _local_ministry_leader(person, ministry_kind, campus)
 
 
-def can_report_item_status(person, item, ministry_kind) -> bool:
-    """Quem pode reportar o status 🟢🟡🔴 de um ministério num item do rundown:
-    manager, quem gerencia o evento, ou qualquer participante (líder ou membro,
-    geral ou local) do ministry_kind sendo reportado."""
+def _can_act_for_ministry_on_event(person, event, ministry_kind) -> bool:
+    """Regra compartilhada: manager, quem gerencia o evento, ou qualquer
+    participante (líder ou membro, geral ou local) do ministry_kind informado.
+    Usada tanto pro status 🟢🟡🔴 de item do rundown quanto pro checklist."""
     if not person.is_authenticated:
         return False
-    if person.is_manager or can_manage_event(person, item.event):
+    if person.is_manager or can_manage_event(person, event):
         return True
-    return _ministry_participant(person, ministry_kind, item.event.campus)
+    return _ministry_participant(person, ministry_kind, event.campus)
+
+
+def can_report_item_status(person, item, ministry_kind) -> bool:
+    return _can_act_for_ministry_on_event(person, item.event, ministry_kind)
+
+
+def can_manage_checklist_item(person, item, ministry_kind=None) -> bool:
+    return _can_act_for_ministry_on_event(person, item.event, ministry_kind or item.ministry_kind)
+
+
+def can_respond_roster_entry(person, entry) -> bool:
+    """Confirmar/recusar: a própria pessoa convidada, ou quem gerencia o
+    ministério (líder local/geral ou líder de campus, via can_manage_ministry)."""
+    if not person.is_authenticated:
+        return False
+    return person.is_manager or entry.person_id == person.pk or can_manage_ministry(person, entry.ministry)
 
 
 def can_manage_demand_source(person, demand) -> bool:
@@ -218,3 +234,51 @@ class DemandPermission(BasePermission):
         if view.action in ("accept", "complete", "reject"):
             return can_manage_demand_target(request.user, obj)
         return can_manage_demand_source(request.user, obj)
+
+
+class EventRosterEntryPermission(BasePermission):
+    """Convidar (criar): quem gerencia o ministério informado no corpo.
+    Confirmar/recusar: can_respond_roster_entry (o próprio convidado ou quem
+    gerencia o ministério). Remover: quem gerencia o ministério."""
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if view.action == "create":
+            ministry_id = request.data.get("ministry_id")
+            ministry = Ministry.objects.filter(pk=ministry_id).first() if ministry_id else None
+            if ministry is None:
+                return True  # deixa a validação do serializer gerar um 400 limpo
+            return can_manage_ministry(request.user, ministry)
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        if view.action in ("confirm", "decline"):
+            return can_respond_roster_entry(request.user, obj)
+        return can_manage_ministry(request.user, obj.ministry)
+
+
+class EventChecklistItemPermission(BasePermission):
+    """Criar/marcar feito: quem pode agir pelo ministry_kind informado no corpo
+    naquele evento (_can_act_for_ministry_on_event)."""
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if view.action == "create":
+            from .models import Event
+
+            event_id = request.data.get("event_id")
+            ministry_kind = request.data.get("ministry_kind")
+            event = Event.objects.filter(pk=event_id).first() if event_id else None
+            if event is None or not ministry_kind:
+                return True  # deixa a validação do serializer gerar um 400 limpo
+            return _can_act_for_ministry_on_event(request.user, event, ministry_kind)
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return can_manage_checklist_item(request.user, obj)

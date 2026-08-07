@@ -15,7 +15,7 @@ services:
     build: .
     command: python manage.py runserver 0.0.0.0:8000
     ports:
-      - "8001:8000"
+      - "8090:8000"
     <<: *env
 
   worker:

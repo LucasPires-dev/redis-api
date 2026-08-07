@@ -100,6 +100,10 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
+# Liga só em deploys de teste onde o IP do frontend na rede local não é fixo
+# (então não dá pra listar em CORS_ALLOWED_ORIGINS de antemão). Mantém False
+# por padrão — nunca ligar isso com um deploy exposto à internet.
+CORS_ALLOW_ALL_ORIGINS = config("CORS_ALLOW_ALL_ORIGINS", default=False, cast=bool)
 
 # Redis: camada de canais do Channels (WebSocket) e broker/result backend do Celery — índices
 # de DB diferentes (0 e 1) na mesma instância pra não misturar as duas filas. Default aponta

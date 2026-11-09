@@ -178,7 +178,8 @@ class ReconciliationViewSet(viewsets.ModelViewSet):
         # /api/cells/ under scope_cells — this is the only way they can see which
         # GTs exist at their convert's campus to pick one.
         reconciliation = self.get_object()  # can_manage_reconciliation (incl. the reconciliador)
-        cells = Cell.objects.filter(campus=reconciliation.campus)
+        # Only cells running now: a convert shouldn't be sent to last season's cell.
+        cells = Cell.objects.active().filter(campus=reconciliation.campus)
         return Response(AvailableCellSerializer(cells, many=True).data)
 
     @action(detail=True, methods=["get"], url_path="available-ministries")

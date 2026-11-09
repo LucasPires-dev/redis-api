@@ -129,7 +129,7 @@ class AvailableCellSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Cell
-        fields = ["id", "name", "weekday"]
+        fields = ["id", "name", "meeting_day", "meeting_time"]
 
 
 class AvailableMinistrySerializer(serializers.ModelSerializer):

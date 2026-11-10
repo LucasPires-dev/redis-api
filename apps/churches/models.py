@@ -466,7 +466,7 @@ class CellLeadership(models.Model):
     person = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cell_leaderships"
     )
-    role = models.CharField(max_length=16, choices=LeadershipRole.choices)
+    role = models.CharField(max_length=16, choices=LeadershipRole.choices, default=LeadershipRole.LEADER)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -2,6 +2,7 @@ import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
+from django.db.models.functions import Lower
 
 from .managers import PersonManager
 
@@ -95,6 +96,17 @@ class Person(AbstractBaseUser, PermissionsMixin):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            # Backstop for code paths that skip save() (bulk_create, update()):
+            # "Ana@x" and "ana@x" must never be two accounts.
+            models.UniqueConstraint(Lower("email"), name="people_person_email_ci_unique"),
+        ]
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        # Covers every way a person is saved (admin, imports, conversions), not
+        # just create_user.
+        self.email = PersonManager.normalize_email(self.email)
+        super().save(*args, **kwargs)

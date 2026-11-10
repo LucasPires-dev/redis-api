@@ -4,6 +4,20 @@ from django.contrib.auth.base_user import BaseUserManager
 class PersonManager(BaseUserManager):
     use_in_migrations = True
 
+    @classmethod
+    def normalize_email(cls, email):
+        """Lowercases the whole address, not just the domain like Django does.
+
+        Email is the login, and phones often auto-capitalize the first letter:
+        without this, "Ana@" and "ana@" would be two separate accounts and
+        "Ana@" couldn't log in to the "ana@" one.
+        """
+        return (email or "").strip().lower()
+
+    def get_by_natural_key(self, username):
+        # Login (ModelBackend -> simplejwt) looks the person up by email.
+        return self.get(**{f"{self.model.USERNAME_FIELD}__iexact": username})
+
     def _create_person(self, email, password, **extra_fields):
         if not email:
             raise ValueError("Person must have an email address.")

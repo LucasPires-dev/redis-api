@@ -56,6 +56,18 @@ def test_leader_registers_a_person(api_client, leader, campus):
     assert Person.objects.get(email="nova@ilan.church").check_password(PASSWORD)
 
 
+def test_registering_an_email_that_differs_only_by_case_is_rejected(api_client, leader, regular_person):
+    # A clean 400 instead of a DB error when "Fulano@" already exists as "fulano@".
+    response = auth(api_client, leader).post(
+        "/api/people/",
+        {"name": "Duplicada", "email": regular_person.email.upper(), "password": PASSWORD},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "email" in response.data
+
+
 def test_registering_requires_a_password(api_client, leader):
     response = auth(api_client, leader).post(
         "/api/people/", {"name": "Nova", "email": "nova@ilan.church"}, format="json"

@@ -132,6 +132,17 @@ class PersonSerializer(serializers.ModelSerializer):
     def get_total_points(self, obj):
         return personal_total_points(obj)
 
+    def validate_email(self, value):
+        """Stored lowercased (see PersonManager.normalize_email); uniqueness is
+        checked ignoring case so the error is a clean 400, not a DB error."""
+        value = Person.objects.normalize_email(value)
+        others = Person.objects.filter(email__iexact=value)
+        if self.instance is not None:
+            others = others.exclude(pk=self.instance.pk)
+        if others.exists():
+            raise serializers.ValidationError("Já existe uma pessoa com este e-mail.")
+        return value
+
     def validate(self, attrs):
         """Email and password are login credentials: on update, only the person
         themselves may change them through the API. Otherwise anyone allowed to

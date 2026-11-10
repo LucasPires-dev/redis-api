@@ -51,12 +51,19 @@ def test_create_user_defaults_grant_no_privileges():
     assert not person.is_superuser
 
 
-def test_create_user_lowercases_the_email_domain():
-    # Django's normalize_email lowercases only the domain — the local part is kept
-    # as typed (see the xfail tests below for why that is a problem).
-    person = Person.objects.create_user(email="ana@ILAN.CHURCH", name="Ana", password=PASSWORD)
+def test_create_user_lowercases_the_whole_email():
+    # Unlike Django's default (domain only): the email is the login, so "Ana@" and
+    # "ana@" must be the same account.
+    person = Person.objects.create_user(email=" Ana@ILAN.CHURCH ", name="Ana", password=PASSWORD)
 
     assert person.email == "ana@ilan.church"
+
+
+def test_save_lowercases_the_email_on_any_path():
+    # Admin edits, imports and lead conversions don't go through create_user.
+    person = Person.objects.create(email="Joao@Ilan.Church", name="João")
+
+    assert person.email == "joao@ilan.church"
 
 
 # --- create_superuser ----------------------------------------------------------------
@@ -91,13 +98,6 @@ def test_email_is_unique():
         Person.objects.create_user(email="ana@ilan.church", name="Outra Ana", password=PASSWORD)
 
 
-# The two xfail tests below describe the DESIRED behavior. strict=True makes pytest
-# report an error once the bug is fixed (XPASS) — then just remove the decorator.
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known bug: normalize_email only lowercases the domain, so 'Ana@' and 'ana@' "
-    "become two different accounts.",
-)
 def test_email_uniqueness_ignores_case():
     Person.objects.create_user(email="Ana@ilan.church", name="Ana", password=PASSWORD)
 
@@ -105,11 +105,6 @@ def test_email_uniqueness_ignores_case():
         Person.objects.create_user(email="ana@ilan.church", name="Outra Ana", password=PASSWORD)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known bug: login compares the email case-sensitively, so a phone that "
-    "auto-capitalizes the first letter can't log in.",
-)
 def test_login_ignores_email_case(api_client):
     Person.objects.create_user(email="ana@ilan.church", name="Ana", password=PASSWORD)
 

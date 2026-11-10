@@ -14,8 +14,8 @@ ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="", cast=Csv())
 AUTH_USER_MODEL = "people.Person"
 
 INSTALLED_APPS = [
-    "daphne",  # precisa vir antes de django.contrib.staticfiles (convenção Channels: substitui
-    # o runserver padrão por um que também serve WebSocket em dev)
+    "daphne",  # must come before django.contrib.staticfiles (Channels convention: replaces
+    # the default runserver with one that also serves WebSocket in dev)
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -33,6 +33,8 @@ INSTALLED_APPS = [
     "apps.churches",
     "apps.reconciliation",
     "apps.production",
+    "apps.courses",
+    "apps.payments",
 ]
 
 MIDDLEWARE = [
@@ -100,15 +102,15 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
-# Liga só em deploys de teste onde o IP do frontend na rede local não é fixo
-# (então não dá pra listar em CORS_ALLOWED_ORIGINS de antemão). Mantém False
-# por padrão — nunca ligar isso com um deploy exposto à internet.
+# Enable only on test deploys where the frontend's IP on the local network isn't
+# fixed (so it can't be listed in CORS_ALLOWED_ORIGINS up front). Keep it False
+# by default — never enable this on a deploy exposed to the internet.
 CORS_ALLOW_ALL_ORIGINS = config("CORS_ALLOW_ALL_ORIGINS", default=False, cast=bool)
 
-# Redis: camada de canais do Channels (WebSocket) e broker/result backend do Celery — índices
-# de DB diferentes (0 e 1) na mesma instância pra não misturar as duas filas. Default aponta
-# pro Redis local (fora de Docker); docker-compose.yml/swarm-stack.yml sobrescrevem para o
-# hostname do serviço `redis` dentro da rede do container.
+# Redis: the Channels channel layer (WebSocket) and Celery's broker/result backend — different
+# DB indexes (0 and 1) on the same instance so the two queues don't mix. The default points
+# to the local Redis (outside Docker); docker-compose.yml/swarm-stack.yml override it with
+# the `redis` service hostname inside the container network.
 REDIS_URL = config("REDIS_URL", default="redis://127.0.0.1:6379/0")
 CHANNEL_LAYERS = {
     "default": {
@@ -130,8 +132,8 @@ GOOGLE_SHEETS_CREDENTIALS_JSON = config("GOOGLE_SHEETS_CREDENTIALS_JSON", defaul
 GOOGLE_SHEETS_SPREADSHEET_ID = config("GOOGLE_SHEETS_SPREADSHEET_ID", default="")
 GOOGLE_SHEETS_RANGE = config("GOOGLE_SHEETS_RANGE", default="Respostas ao formulário 1!A:Z")
 
-# Substitui o `python manage.py sync_reconciliation_leads` manual por uma execução periódica
-# via Celery Beat — a task só chama o mesmo management command (nenhuma lógica duplicada).
+# Replaces the manual `python manage.py sync_reconciliation_leads` with a periodic run
+# via Celery Beat — the task just calls the same management command (no duplicated logic).
 CELERY_BEAT_SCHEDULE = {
     "sync-reconciliation-leads": {
         "task": "apps.reconciliation.tasks.sync_reconciliation_leads",
@@ -156,6 +158,9 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+ASAAS_API_KEY = config("ASAAS_API_KEY", default="")
+ASAAS_SANDBOX = config("ASAAS_SANDBOX", default=True, cast=bool)
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Redis API",

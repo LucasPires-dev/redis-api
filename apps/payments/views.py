@@ -1,10 +1,10 @@
 import logging
 
-from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.response import Response
 
 from apps.production.models import Event
@@ -21,6 +21,12 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PaymentProviderUnavailable(APIException):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_detail = "Não foi possível gerar a cobrança agora. Tente novamente em alguns minutos."
+    default_code = "payment_provider_unavailable"
 
 
 class EventTicketConfigViewSet(viewsets.ModelViewSet):
@@ -98,7 +104,11 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
                 registration.payment_url = charge.get("invoiceUrl", "")
                 registration.save(update_fields=["asaas_payment_id", "payment_url"])
             except AsaasError:
+                # Without a charge the registration could never be paid — and the
+                # one-registration-per-person rule would block a retry. Undo it.
                 logger.exception("Failed to create Asaas charge for registration %s", registration.id)
+                registration.delete()
+                raise PaymentProviderUnavailable()
         else:
             registration.payment_status = PaymentStatus.CONFIRMED
             registration.paid_at = timezone.now()
@@ -111,6 +121,12 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         registration = self.get_object()
         if registration.payment_status == PaymentStatus.CANCELLED:
             return Response(EventRegistrationSerializer(registration).data)
+        # A paid registration needs a refund in Asaas first — cancelling it here
+        # would silently keep the money. The organizers handle refunds.
+        if registration.payment_status == PaymentStatus.CONFIRMED and registration.asaas_payment_id:
+            raise drf_serializers.ValidationError(
+                {"detail": "Inscrição já paga. Procure a organização do evento para solicitar o reembolso."}
+            )
         registration.payment_status = PaymentStatus.CANCELLED
         registration.save(update_fields=["payment_status", "updated_at"])
         broadcast_event_update(registration.event_id, "registration")
@@ -125,6 +141,9 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         event = Event.objects.filter(pk=event_id).first()
         if not event:
             return Response({"detail": "Evento não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        # Registration counts and revenue are for whoever manages the event only.
+        if not can_manage_event(request.user, event):
+            raise PermissionDenied()
 
         regs = EventRegistration.objects.filter(event=event)
         confirmed = regs.filter(payment_status=PaymentStatus.CONFIRMED)

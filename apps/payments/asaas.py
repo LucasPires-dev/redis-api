@@ -1,7 +1,9 @@
 import logging
+from datetime import timedelta
 
 import httpx
 from django.conf import settings
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,11 @@ def find_or_create_customer(email: str, name: str) -> str:
         return data["id"]
 
 
+# Days the payer has to pay a charge (Asaas requires a due date; a boleto due
+# "today" would barely be payable).
+CHARGE_DUE_DAYS = 3
+
+
 def create_charge(
     customer_id: str,
     amount_cents: int,
@@ -63,6 +70,7 @@ def create_charge(
 ) -> dict:
     """Creates a charge (Pix + boleto). Returns the full Asaas payment object
     including `id`, `invoiceUrl`, `bankSlipUrl`, and `status`."""
+    due_date = timezone.localdate() + timedelta(days=CHARGE_DUE_DAYS)
     with _client() as client:
         resp = client.post(
             "/payments",
@@ -72,7 +80,7 @@ def create_charge(
                 "value": amount_cents / 100,
                 "description": description,
                 "externalReference": external_reference,
-                "dueDate": None,  # immediate
+                "dueDate": due_date.isoformat(),  # required by Asaas (YYYY-MM-DD)
             },
         )
         return _check(resp)

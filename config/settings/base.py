@@ -161,6 +161,9 @@ SIMPLE_JWT = {
 
 ASAAS_API_KEY = config("ASAAS_API_KEY", default="")
 ASAAS_SANDBOX = config("ASAAS_SANDBOX", default=True, cast=bool)
+# Token set in the Asaas panel for the webhook (sent in the `asaas-access-token`
+# header). Empty = the webhook rejects every call (fail closed).
+ASAAS_WEBHOOK_TOKEN = config("ASAAS_WEBHOOK_TOKEN", default="")
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Redis API",

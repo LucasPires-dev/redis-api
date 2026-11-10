@@ -27,6 +27,13 @@ class EventTicketConfigSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["created_at", "updated_at"]
 
+    def validate_event_id(self, event):
+        # Permission is checked against the config's current event, so moving it to
+        # another event would bypass that check (onto an event the user doesn't manage).
+        if self.instance is not None and event.pk != self.instance.event_id:
+            raise serializers.ValidationError("Não é possível mover o ingresso para outro evento.")
+        return event
+
 
 class RegistrationPersonMiniSerializer(serializers.ModelSerializer):
     class Meta:

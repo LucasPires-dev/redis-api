@@ -55,6 +55,18 @@ def can_manage_ministry(person, ministry) -> bool:
     return can_manage_campus(person, ministry.campus)
 
 
+def can_appoint_ministry_leaders(person, ministry) -> bool:
+    """Who appoints a local ministry's leaders: the levels above it — the manager,
+    the campus leader of the ministry's campus, or the general leader of that
+    ministry kind (who acts on every campus). Not the ministry's own leaders:
+    nobody promotes/demotes peers at their own level."""
+    if not person.is_authenticated:
+        return False
+    if can_manage_campus(person, ministry.campus):
+        return True
+    return ministry.kind in general_led_kinds(person)
+
+
 def scope_ministries(qs, person):
     """Ministries a person may see: everything for a manager, otherwise the ones
     they lead/co-lead locally plus every ministry of a kind they lead generally,
@@ -98,7 +110,7 @@ class MinistryPermission(BasePermission):
 
 
 def is_cells_general_leader(person) -> bool:
-    """Responsável geral pelas células (CellGeneralLeadership)."""
+    """General cells leader — responsável geral pelas células (CellGeneralLeadership)."""
     if not person.is_authenticated:
         return False
     return CellGeneralLeadership.objects.filter(leaders=person).exists()
@@ -147,7 +159,7 @@ def can_manage_cell(person, cell) -> bool:
 
 
 def scope_cells(qs, person):
-    """Células a pessoa may see: everything for a manager or the general cells
+    """Cells a person may see: everything for a manager or the general cells
     leader; otherwise the ones they lead/co-lead plus the ones they're simply a
     member of (read access), plus every célula at a campus they lead or whose
     cells they're in charge of."""

@@ -90,6 +90,24 @@ class CampusCellsLeadershipSerializer(serializers.ModelSerializer):
         fields = ["id", "campus", "person", "role"]
 
 
+class GeneralLeaderInputSerializer(serializers.Serializer):
+    """Payload for adding someone to a general (church-wide) leadership."""
+
+    person_id = serializers.UUIDField()
+
+
+class CampusCoursesLeadershipSerializer(serializers.ModelSerializer):
+    """Read-only; assignment goes through CampusViewSet.courses_leaderships."""
+
+    person = PersonMiniSerializer(read_only=True)
+
+    class Meta:
+        from apps.courses.models import CampusCoursesLeadership
+
+        model = CampusCoursesLeadership
+        fields = ["id", "campus", "person", "role"]
+
+
 class MinistryLeadershipSerializer(serializers.ModelSerializer):
     """Read-only representation — creation/removal is handled explicitly in the view
     (see MinistryLeadershipInputSerializer), not through ModelSerializer.create()."""
@@ -493,10 +511,8 @@ class ActivityCompletionInputSerializer(serializers.Serializer):
 
 
 class MinistryGeneralLeadershipSerializer(serializers.ModelSerializer):
-    """Read-only for now — general leadership is assigned via admin/seed in this pass,
-    same as Church/Campus creation. Every *local* leadership (Ministry, Cell, Team,
-    Campus) has its own `leaderships` write endpoint — only general leadership
-    remains admin/seed-only."""
+    """Read-only representation; leaders are chosen through
+    MinistryGeneralLeadershipViewSet.add_leader/remove_leader (manager-only)."""
 
     leaders = PersonMiniSerializer(many=True, read_only=True)
 

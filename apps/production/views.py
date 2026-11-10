@@ -6,11 +6,13 @@ from rest_framework.response import Response
 from .choices import DemandStatus, RosterStatus
 from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
 from .permissions import (
+    PRODUCER_EVENT_TYPES,
     DemandPermission,
     EventChecklistItemPermission,
     EventPermission,
     EventRosterEntryPermission,
     RundownItemPermission,
+    is_any_event_producer,
     scope_demands,
     scope_events,
 )
@@ -38,7 +40,11 @@ class EventViewSet(viewsets.ModelViewSet):
         return scope_events(qs, self.request.user)
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        extra = {"created_by": self.request.user}
+        event_type = serializer.validated_data.get("event_type")
+        if event_type in PRODUCER_EVENT_TYPES and is_any_event_producer(self.request.user):
+            extra["producer"] = self.request.user
+        serializer.save(**extra)
 
 
 class RundownItemViewSet(viewsets.ModelViewSet):

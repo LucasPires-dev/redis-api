@@ -16,10 +16,10 @@ class MinistryKind(models.TextChoices):
     TRANSMISSAO = "transmissao", "Transmissão"
 
 
-# Ministérios "técnicos"/de produção — quem executa a produção de um Evento (ao
-# contrário dos ministérios "de público", que criam Eventos e demandam desses).
-# Usado pela apps.production para validar o destino de uma Demand e pela UI para
-# distinguir as duas categorias, sem duplicar o enum acima.
+# "Technical"/production ministries — the ones who carry out the production of an
+# Event (as opposed to "audience-facing" ministries, which create Events and send
+# demands to these). Used by apps.production to validate a Demand's target and by
+# the UI to tell the two categories apart, without duplicating the enum above.
 PRODUCTION_MINISTRY_KINDS = {
     MinistryKind.MEDIA,
     MinistryKind.SOM,

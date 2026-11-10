@@ -6,10 +6,10 @@ from .permissions import scope_events
 
 
 class EventConsumer(AsyncJsonWebsocketConsumer):
-    """Stream somente leitura: o cliente nunca manda mensagem, só recebe um
-    aviso enxuto (`kind`) toda vez que algo muda no Evento — quem recebe reage
-    invalidando a query REST correspondente e refetchando, em vez de tentar
-    sincronizar o shape completo por dois caminhos (WS e REST)."""
+    """Read-only stream: the client never sends messages, it only receives a
+    minimal notice (`kind`) whenever something changes on the Event — the
+    receiver reacts by invalidating the matching REST query and refetching,
+    instead of trying to sync the full shape through two paths (WS and REST)."""
 
     async def connect(self):
         self.event_id = self.scope["url_route"]["kwargs"]["event_id"]
@@ -29,8 +29,8 @@ class EventConsumer(AsyncJsonWebsocketConsumer):
     def _can_view_event(self, user, event_id) -> bool:
         if not user or not user.is_authenticated:
             return False
-        # Reaproveita 100% a regra de visibilidade já usada pelos endpoints REST
-        # (scope_events) — nenhuma duplicação de permissão pro WebSocket.
+        # Fully reuses the visibility rule the REST endpoints already use
+        # (scope_events) — no duplicated permission logic for the WebSocket.
         return scope_events(Event.objects.filter(pk=event_id), user).exists()
 
     async def event_update(self, event):

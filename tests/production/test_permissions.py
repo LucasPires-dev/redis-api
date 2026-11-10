@@ -3,7 +3,7 @@ from django.utils import timezone
 
 from apps.churches.choices import MinistryKind
 from apps.churches.models import MinistryGeneralLeadership
-from apps.production.choices import DemandType
+from apps.production.choices import DemandType, EventType
 from apps.production.models import Demand, Event
 from apps.production.permissions import (
     can_create_event,
@@ -29,17 +29,17 @@ def _event(**kwargs):
 def test_manager_can_manage_and_create_any_event(manager, campus, jovens_ministry):
     event = _event(campus=campus, ministry_kind=MinistryKind.JOVENS)
     assert can_manage_event(manager, event)
-    assert can_create_event(manager, MinistryKind.JOVENS, campus)
+    assert can_create_event(manager, EventType.MINISTRY_EVENT, MinistryKind.JOVENS, campus)
 
 
 def test_local_leader_can_manage_own_ministry_event_only(jovens_leader, campus, other_campus, jovens_ministry):
     local_event = _event(campus=campus, ministry_kind=MinistryKind.JOVENS)
     assert can_manage_event(jovens_leader, local_event)
-    assert can_create_event(jovens_leader, MinistryKind.JOVENS, campus)
+    assert can_create_event(jovens_leader, EventType.MINISTRY_EVENT, MinistryKind.JOVENS, campus)
 
     other_campus_event = _event(campus=other_campus, ministry_kind=MinistryKind.JOVENS)
     assert not can_manage_event(jovens_leader, other_campus_event)
-    assert not can_create_event(jovens_leader, MinistryKind.JOVENS, other_campus)
+    assert not can_create_event(jovens_leader, EventType.MINISTRY_EVENT, MinistryKind.JOVENS, other_campus)
 
 
 def test_general_leader_can_manage_event_at_any_campus(regular_person, campus, other_campus):
@@ -49,13 +49,13 @@ def test_general_leader_can_manage_event_at_any_campus(regular_person, campus, o
     event_there = _event(campus=other_campus, ministry_kind=MinistryKind.JOVENS)
     assert can_manage_event(regular_person, event_here)
     assert can_manage_event(regular_person, event_there)
-    assert can_create_event(regular_person, MinistryKind.JOVENS, None)
+    assert can_create_event(regular_person, EventType.MINISTRY_EVENT, MinistryKind.JOVENS, None)
 
 
 def test_regular_person_cannot_manage_or_create_event(regular_person, campus):
     event = _event(campus=campus, ministry_kind=MinistryKind.JOVENS)
     assert not can_manage_event(regular_person, event)
-    assert not can_create_event(regular_person, MinistryKind.JOVENS, campus)
+    assert not can_create_event(regular_person, EventType.MINISTRY_EVENT, MinistryKind.JOVENS, campus)
 
 
 def test_campus_leader_can_manage_local_events_regardless_of_ministry(campus_leader, campus, jovens_ministry):

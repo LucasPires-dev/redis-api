@@ -4,6 +4,6 @@ from django.core.management import call_command
 
 @shared_task
 def sync_reconciliation_leads() -> None:
-    """Roda periodicamente via Celery Beat (ver CELERY_BEAT_SCHEDULE) — reaproveita
-    o management command existente em vez de duplicar a lógica de sincronização."""
+    """Runs periodically via Celery Beat (see CELERY_BEAT_SCHEDULE) — reuses the
+    existing management command instead of duplicating the sync logic."""
     call_command("sync_reconciliation_leads")

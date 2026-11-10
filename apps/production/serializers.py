@@ -11,8 +11,8 @@ Person = get_user_model()
 
 
 class ProductionCampusMiniSerializer(serializers.ModelSerializer):
-    """Local, read-only — mesmo racional de ReconciliationCampusMiniSerializer:
-    evita import cruzado e colisão de nome de componente no schema."""
+    """Local, read-only — same rationale as ReconciliationCampusMiniSerializer:
+    avoids a cross-app import and a component name clash in the schema."""
 
     class Meta:
         model = Campus
@@ -20,7 +20,7 @@ class ProductionCampusMiniSerializer(serializers.ModelSerializer):
 
 
 class ProductionMinistryMiniSerializer(serializers.ModelSerializer):
-    """Local, read-only — mesmo racional de ProductionCampusMiniSerializer."""
+    """Local, read-only — same rationale as ProductionCampusMiniSerializer."""
 
     class Meta:
         model = Ministry
@@ -58,10 +58,20 @@ class SetItemStatusInputSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=ItemStatus.choices)
 
 
+class ProducerMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Person
+        fields = ["id", "name"]
+
+
 class EventSerializer(serializers.ModelSerializer):
     campus = ProductionCampusMiniSerializer(read_only=True)
     campus_id = serializers.PrimaryKeyRelatedField(
         queryset=Campus.objects.all(), source="campus", write_only=True, required=False, allow_null=True
+    )
+    producer = ProducerMiniSerializer(read_only=True)
+    producer_id = serializers.PrimaryKeyRelatedField(
+        queryset=Person.objects.all(), source="producer", write_only=True, required=False, allow_null=True
     )
     rundown_items = RundownItemSerializer(many=True, read_only=True)
 
@@ -70,12 +80,16 @@ class EventSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "title",
+            "description",
             "event_type",
             "campus",
             "campus_id",
             "ministry_kind",
             "starts_at",
+            "ends_at",
             "status",
+            "producer",
+            "producer_id",
             "rundown_items",
             "created_at",
         ]
@@ -83,8 +97,8 @@ class EventSerializer(serializers.ModelSerializer):
 
 
 class EventMiniSerializer(serializers.ModelSerializer):
-    """Vista enxuta de Event usada em Demand.event — evita serializar o rundown
-    inteiro toda vez que uma demanda é listada."""
+    """Slim view of Event used in Demand.event — avoids serializing the whole
+    rundown every time a demand is listed."""
 
     campus = ProductionCampusMiniSerializer(read_only=True)
 
@@ -103,6 +117,9 @@ class DemandSerializer(serializers.ModelSerializer):
     event = EventMiniSerializer(read_only=True)
     event_id = serializers.PrimaryKeyRelatedField(
         queryset=Event.objects.all(), source="event", write_only=True, required=False, allow_null=True
+    )
+    from_ministry_kind = serializers.ChoiceField(
+        choices=MinistryKind.choices, required=False, allow_null=True, allow_blank=True
     )
     from_campus = ProductionCampusMiniSerializer(read_only=True)
     from_campus_id = serializers.PrimaryKeyRelatedField(
@@ -142,6 +159,17 @@ class DemandSerializer(serializers.ModelSerializer):
         if value not in PRODUCTION_MINISTRY_KINDS:
             raise serializers.ValidationError("Demandas só podem ser endereçadas a um ministério técnico/produção.")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        from_kind = attrs.get("from_ministry_kind")
+        if not from_kind:
+            attrs["from_ministry_kind"] = None
+            if not attrs.get("event"):
+                raise serializers.ValidationError(
+                    {"event_id": "Evento é obrigatório quando from_ministry_kind não é informado."}
+                )
+        return attrs
 
 
 class RejectDemandInputSerializer(serializers.Serializer):

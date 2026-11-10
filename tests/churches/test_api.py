@@ -46,6 +46,60 @@ def test_manager_can_remove_a_leadership(api_client, manager, leader, brave):
     assert resp.status_code == 204
 
 
+# --- Access hierarchy: each level appoints the level below it ---------------------------
+# Institution (manager) → campus leaders → ministry leaders of that campus.
+
+
+def test_campus_leader_appoints_ministry_leader_at_their_campus(
+    api_client, campus_leader, regular_person, brave
+):
+    resp = auth(api_client, campus_leader).post(
+        f"/api/ministries/{brave.id}/leaderships/",
+        {"person_id": str(regular_person.id), "role": "leader"},
+        format="json",
+    )
+    assert resp.status_code == 201, resp.data
+    assert brave.leaderships.filter(person=regular_person).exists()
+
+
+def test_campus_leader_removes_ministry_leader_at_their_campus(api_client, campus_leader, leader, brave):
+    resp = auth(api_client, campus_leader).delete(f"/api/ministries/{brave.id}/leaderships/{leader.id}/")
+    assert resp.status_code == 204
+
+
+def test_campus_leader_cannot_appoint_at_another_campus(
+    api_client, campus_leader, regular_person, other_ministry
+):
+    resp = auth(api_client, campus_leader).post(
+        f"/api/ministries/{other_ministry.id}/leaderships/",
+        {"person_id": str(regular_person.id), "role": "leader"},
+        format="json",
+    )
+    # 404 when the ministry is outside their scope, 403 if it were visible — never allowed.
+    assert resp.status_code in (403, 404)
+    assert not other_ministry.leaderships.exists()
+
+
+def test_ministry_leader_cannot_appoint_other_ministry_leaders(api_client, leader, regular_person, brave):
+    # Same level can't promote peers — only the level above (campus or institution).
+    resp = auth(api_client, leader).post(
+        f"/api/ministries/{brave.id}/leaderships/",
+        {"person_id": str(regular_person.id), "role": "co_leader"},
+        format="json",
+    )
+    assert resp.status_code == 403
+
+
+def test_campus_leader_cannot_appoint_campus_leaders(api_client, campus_leader, regular_person, campus):
+    # Campus leadership is appointed by the institution (manager), the level above.
+    resp = auth(api_client, campus_leader).post(
+        f"/api/campuses/{campus.id}/leaderships/",
+        {"person_id": str(regular_person.id), "role": "co_leader"},
+        format="json",
+    )
+    assert resp.status_code == 403
+
+
 def test_regular_person_cannot_register_people(api_client, regular_person):
     resp = auth(api_client, regular_person).post(
         "/api/people/", {"name": "X", "email": "x@ilan.church", "password": "Senha123!"}
@@ -89,3 +143,35 @@ def test_campus_leader_sees_people_at_their_campus(api_client, campus_leader, re
     ids = {p["id"] for p in resp.data["results"]}
     assert str(regular_person.id) in ids
     assert str(other_person.id) not in ids
+
+
+def test_general_ministry_leader_appoints_local_leaders_at_any_campus(
+    api_client, regular_person, other_ministry, other_campus
+):
+    # The institution picks a general leader per ministry kind; they manage that
+    # ministry's leaderships on every campus. other_ministry is kind=jovens.
+    from apps.churches.choices import MinistryKind
+    from apps.churches.models import MinistryGeneralLeadership
+
+    MinistryGeneralLeadership.objects.create(kind=MinistryKind.JOVENS).leaders.add(regular_person)
+    local = make_person(email="lider.jovens.fora@ilan.church", name="Líder Jovens", campus=other_campus)
+
+    resp = auth(api_client, regular_person).post(
+        f"/api/ministries/{other_ministry.id}/leaderships/",
+        {"person_id": str(local.id), "role": "leader"},
+        format="json",
+    )
+    assert resp.status_code == 201, resp.data
+
+
+def test_general_ministry_leader_cannot_appoint_in_another_ministry_kind(
+    api_client, regular_person, brave, leader
+):
+    # brave is kind=adolescentes — a general Jovens leader has no say there.
+    from apps.churches.choices import MinistryKind
+    from apps.churches.models import MinistryGeneralLeadership
+
+    MinistryGeneralLeadership.objects.create(kind=MinistryKind.JOVENS).leaders.add(regular_person)
+
+    resp = auth(api_client, regular_person).delete(f"/api/ministries/{brave.id}/leaderships/{leader.id}/")
+    assert resp.status_code in (403, 404)

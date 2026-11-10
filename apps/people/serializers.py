@@ -1,5 +1,6 @@
 from django.db.models import Sum
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 
 from apps.churches.choices import MinistryKind
 from apps.churches.models import ActivityCompletion, Campus, Cell, Ministry, Team
@@ -10,6 +11,8 @@ from apps.churches.permissions import (
     led_campuses_cells,
     led_ministries,
 )
+from apps.courses.permissions import is_courses_general_leader
+from apps.production.permissions import is_any_event_producer, producer_campuses
 
 from .models import Person
 
@@ -129,6 +132,21 @@ class PersonSerializer(serializers.ModelSerializer):
     def get_total_points(self, obj):
         return personal_total_points(obj)
 
+    def validate(self, attrs):
+        """Email and password are login credentials: on update, only the person
+        themselves may change them through the API. Otherwise anyone allowed to
+        edit a person (ministry/campus leader, reconciliador) could take over
+        their account. A manager who needs to reset them uses the Django Admin.
+
+        Resending the current email unchanged is allowed, so a full-form PUT
+        doesn't fail. Registration (create) is not affected."""
+        request = self.context.get("request")
+        if self.instance is not None and request and request.user.pk != self.instance.pk:
+            email_changed = "email" in attrs and attrs["email"] != self.instance.email
+            if email_changed or attrs.get("password"):
+                raise PermissionDenied("Apenas a própria pessoa pode alterar o e-mail e a senha.")
+        return attrs
+
     def create(self, validated_data):
         """Creates the person and, with it, their access account. Password is required.
 
@@ -181,15 +199,25 @@ class MeSerializer(serializers.ModelSerializer):
     # Campuses where the person is leader or co-leader (CampusLeadership).
     led_campuses = serializers.SerializerMethodField()
 
-    # Responsável geral pelas células (CellGeneralLeadership): defines seasons
+    # General cells leader (CellGeneralLeadership): defines seasons
     # and manages every cell.
     is_cells_general_leader = serializers.SerializerMethodField()
 
     # Campuses whose cells the person is in charge of (CampusCellsLeadership).
     led_campuses_cells = serializers.SerializerMethodField()
 
+    # General courses leader (CourseGeneralLeadership): manages every course on every campus.
+    is_courses_general_leader = serializers.SerializerMethodField()
+
+    # Campuses whose courses the person is in charge of (CampusCoursesLeadership).
+    led_campuses_courses = serializers.SerializerMethodField()
+
     # Whether the person serves in the Reconciliação ministry (see get_is_reconciliador).
     is_reconciliador = serializers.SerializerMethodField()
+
+    # Produtor de Eventos (EventProducerAssignment).
+    is_event_producer = serializers.SerializerMethodField()
+    producer_campuses = serializers.SerializerMethodField()
 
     # Total activity points (see personal_total_points).
     total_points = serializers.SerializerMethodField()
@@ -211,7 +239,11 @@ class MeSerializer(serializers.ModelSerializer):
             "led_campuses",
             "is_cells_general_leader",
             "led_campuses_cells",
+            "is_courses_general_leader",
+            "led_campuses_courses",
             "is_reconciliador",
+            "is_event_producer",
+            "producer_campuses",
             "total_points",
         ]
 
@@ -240,13 +272,27 @@ class MeSerializer(serializers.ModelSerializer):
     def get_led_campuses_cells(self, obj):
         return CampusMiniSerializer(led_campuses_cells(obj), many=True).data
 
+    def get_is_courses_general_leader(self, obj):
+        return is_courses_general_leader(obj)
+
+    def get_led_campuses_courses(self, obj):
+        return CampusMiniSerializer(Campus.objects.filter(courses_leaderships__person=obj).distinct(), many=True).data
+
     def get_is_reconciliador(self, obj):
-        # True for any member of a Reconciliação ministry, including a
-        # rank-and-file reconciliador with no leadership at all (a plain
-        # Ministry.members entry). Combined with `led_ministries`, this is how
-        # the frontend tells "serves in Reconciliação" apart from "leads
-        # Reconciliação" for navigation/UI purposes.
         return Ministry.objects.filter(kind=MinistryKind.RECONCILIACAO, members=obj).exists()
+
+    def get_is_event_producer(self, obj):
+        return is_any_event_producer(obj)
+
+    def get_producer_campuses(self, obj):
+        assignments = producer_campuses(obj)
+        if not assignments.exists():
+            return []
+        if assignments.filter(campus__isnull=True).exists():
+            return None  # null = church-wide (all campuses)
+        return CampusMiniSerializer(
+            Campus.objects.filter(event_producers__person=obj), many=True
+        ).data
 
     def get_total_points(self, obj):
         return personal_total_points(obj)

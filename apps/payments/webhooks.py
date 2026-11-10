@@ -18,6 +18,7 @@ import logging
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
@@ -95,7 +96,20 @@ def asaas_webhook(request):
             return Response({"ok": True})
         registration.payment_status = PaymentStatus.CONFIRMED
         registration.paid_at = timezone.now()
-        registration.save(update_fields=["payment_status", "paid_at", "updated_at"])
+        try:
+            with transaction.atomic():
+                registration.save(update_fields=["payment_status", "paid_at", "updated_at"])
+        except IntegrityError:
+            # The person paid an old, cancelled registration's charge after
+            # registering again. Keep the active one; the organizers must refund
+            # this payment. 200 so Asaas doesn't keep retrying.
+            logger.error(
+                "Asaas webhook: payment %s for cancelled registration %s, but the person "
+                "already has an active one — needs a manual refund",
+                payment_id,
+                registration.pk,
+            )
+            return Response({"ok": True})
         logger.info("Registration %s confirmed via Asaas", registration.pk)
     elif event in ASAAS_REFUNDED_EVENTS:
         registration.payment_status = PaymentStatus.REFUNDED

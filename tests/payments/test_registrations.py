@@ -75,12 +75,43 @@ def test_full_event_rejects_new_registrations(api_client, event, paid_config, fa
 # --- Cancelling -----------------------------------------------------------------------
 
 
-def test_person_cancels_an_unpaid_registration(api_client, regular_person, pending_registration):
+def test_person_cancels_an_unpaid_registration(api_client, regular_person, pending_registration, fake_asaas):
     response = auth(api_client, regular_person).post(f"{URL}{pending_registration.id}/cancel/")
 
     assert response.status_code == 200
     pending_registration.refresh_from_db()
     assert pending_registration.payment_status == PaymentStatus.CANCELLED
+    # The payment link is killed too, so the old charge can't be paid anymore.
+    assert fake_asaas["cancelled"] == ["pay_123"]
+
+
+def test_cancel_fails_cleanly_when_asaas_is_down(api_client, regular_person, pending_registration, fake_asaas):
+    # Cancelling locally while the charge stays payable would let money arrive for nothing.
+    fake_asaas["cancel_fails"] = True
+
+    response = auth(api_client, regular_person).post(f"{URL}{pending_registration.id}/cancel/")
+
+    assert response.status_code == 503
+    pending_registration.refresh_from_db()
+    assert pending_registration.payment_status == PaymentStatus.PENDING
+
+
+def test_person_can_register_again_after_cancelling(api_client, regular_person, event, pending_registration, fake_asaas):
+    client = auth(api_client, regular_person)
+    client.post(f"{URL}{pending_registration.id}/cancel/")
+
+    response = client.post(URL, {"event_id": str(event.id)}, format="json")
+
+    assert response.status_code == 201, response.data
+    # The cancelled one stays as history.
+    statuses = set(EventRegistration.objects.filter(event=event, person=regular_person).values_list("payment_status", flat=True))
+    assert statuses == {PaymentStatus.CANCELLED, PaymentStatus.PENDING}
+
+
+def test_cannot_hold_two_active_registrations(api_client, regular_person, event, pending_registration, fake_asaas):
+    response = auth(api_client, regular_person).post(URL, {"event_id": str(event.id)}, format="json")
+
+    assert response.status_code == 400
 
 
 def test_paid_registration_cannot_be_cancelled_by_the_person(api_client, regular_person, pending_registration):
@@ -105,11 +136,43 @@ def test_event_manager_sees_stats(api_client, jovens_leader, event, pending_regi
     assert response.data["pending"] == 1
 
 
+def test_revenue_uses_the_amount_each_person_paid(api_client, jovens_leader, event, paid_config, fake_asaas):
+    # Two people pay R$150, then the price goes up: revenue must stay R$300.
+    for i in range(2):
+        person = make_person(email=f"pagante{i}@ilan.church", name=f"Pagante {i}")
+        auth(api_client, person).post(URL, {"event_id": str(event.id)}, format="json")
+    EventRegistration.objects.filter(event=event).update(payment_status=PaymentStatus.CONFIRMED)
+    paid_config.price_cents = 20000
+    paid_config.save()
+
+    response = auth(api_client, jovens_leader).get(f"{URL}stats/?event={event.id}")
+
+    assert response.data["revenue_cents"] == 30000
+
+
 def test_regular_person_cannot_see_stats(api_client, regular_person, event, pending_registration):
     # Registration counts and revenue are for the event's organizers only.
     response = auth(api_client, regular_person).get(f"{URL}stats/?event={event.id}")
 
     assert response.status_code == 403
+
+
+# --- Listing --------------------------------------------------------------------------
+
+
+def test_mine_returns_only_the_managers_own_registration(api_client, jovens_leader, event, pending_registration):
+    # The event page shows "Sua inscrição" from this list; a manager must not see
+    # someone else's registration there.
+    response = auth(api_client, jovens_leader).get(f"{URL}?event={event.id}&mine=1")
+
+    assert response.status_code == 200
+    assert response.data["results"] == []
+
+
+def test_manager_lists_every_registration_without_mine(api_client, jovens_leader, event, pending_registration):
+    response = auth(api_client, jovens_leader).get(f"{URL}?event={event.id}")
+
+    assert [r["id"] for r in response.data["results"]] == [str(pending_registration.id)]
 
 
 # --- Ticket config --------------------------------------------------------------------

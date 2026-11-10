@@ -38,7 +38,14 @@ def fake_asaas(monkeypatch):
     """Replaces every Asaas HTTP call. `state` lets a test pick what Asaas answers."""
     from apps.payments.asaas import AsaasError
 
-    state = {"status": "CONFIRMED", "charge_fails": False, "status_fails": False, "charges": []}
+    state = {
+        "status": "CONFIRMED",
+        "charge_fails": False,
+        "status_fails": False,
+        "cancel_fails": False,
+        "charges": [],
+        "cancelled": [],
+    }
 
     def find_or_create_customer(email, name):
         return "cus_123"
@@ -49,7 +56,14 @@ def fake_asaas(monkeypatch):
         state["charges"].append(
             {"amount_cents": amount_cents, "external_reference": external_reference}
         )
-        return {"id": "pay_123", "invoiceUrl": "https://asaas.test/i/pay_123"}
+        # First charge is pay_123 (matches `pending_registration`), then pay_124...
+        payment_id = f"pay_{123 + len(state['charges']) - 1}"
+        return {"id": payment_id, "invoiceUrl": f"https://asaas.test/i/{payment_id}"}
+
+    def cancel_charge(payment_id):
+        if state["cancel_fails"]:
+            raise AsaasError(0, "timeout")
+        state["cancelled"].append(payment_id)
 
     def get_payment_status(payment_id):
         if state["status_fails"]:
@@ -58,6 +72,7 @@ def fake_asaas(monkeypatch):
 
     monkeypatch.setattr("apps.payments.views.find_or_create_customer", find_or_create_customer)
     monkeypatch.setattr("apps.payments.views.create_charge", create_charge)
+    monkeypatch.setattr("apps.payments.views.cancel_charge", cancel_charge)
     monkeypatch.setattr("apps.payments.webhooks.get_payment_status", get_payment_status)
     return state
 
@@ -65,5 +80,8 @@ def fake_asaas(monkeypatch):
 @pytest.fixture
 def pending_registration(event, paid_config, regular_person):
     return EventRegistration.objects.create(
-        event=event, person=regular_person, asaas_payment_id="pay_123"
+        event=event,
+        person=regular_person,
+        amount_cents=paid_config.price_cents,
+        asaas_payment_id="pay_123",
     )

@@ -1,5 +1,7 @@
 import logging
 
+from django.db import IntegrityError, transaction
+from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status, viewsets
@@ -11,8 +13,8 @@ from apps.production.models import Event
 from apps.production.permissions import can_manage_event, scope_events
 from apps.production.realtime import broadcast_event_update
 
-from .asaas import AsaasError, create_charge, find_or_create_customer
-from .models import EventRegistration, EventTicketConfig, PaymentStatus
+from .asaas import AsaasError, cancel_charge, create_charge, find_or_create_customer
+from .models import ACTIVE_STATUSES, EventRegistration, EventTicketConfig, PaymentStatus
 from .permissions import RegistrationPermission, TicketConfigPermission
 from .serializers import (
     EventRegistrationSerializer,
@@ -49,10 +51,13 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = EventRegistration.objects.select_related("person", "event")
         event_id = self.request.query_params.get("event")
+        # ?mine=1: only the caller's own registrations, even for an event manager
+        # (who otherwise gets everyone's, for the attendee list).
+        mine = self.request.query_params.get("mine") in ("1", "true")
         if event_id:
             qs = qs.filter(event_id=event_id)
             event = Event.objects.filter(pk=event_id).first()
-            if event and can_manage_event(self.request.user, event):
+            if not mine and event and can_manage_event(self.request.user, event):
                 return qs
         return qs.filter(person=self.request.user)
 
@@ -73,20 +78,27 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
 
         if config.max_capacity:
             current = EventRegistration.objects.filter(
-                event=event,
-                payment_status__in=[PaymentStatus.PENDING, PaymentStatus.CONFIRMED],
+                event=event, payment_status__in=ACTIVE_STATUSES
             ).count()
             if current >= config.max_capacity:
                 raise drf_serializers.ValidationError(
                     {"event_id": "Vagas esgotadas."}
                 )
 
-        if EventRegistration.objects.filter(event=event, person=self.request.user).exists():
-            raise drf_serializers.ValidationError(
-                {"event_id": "Você já está inscrito neste evento."}
-            )
-
-        registration = serializer.save(person=self.request.user)
+        already = drf_serializers.ValidationError({"event_id": "Você já está inscrito neste evento."})
+        # Only active registrations count: after cancelling, the person may register again.
+        if EventRegistration.objects.filter(
+            event=event, person=self.request.user, payment_status__in=ACTIVE_STATUSES
+        ).exists():
+            raise already
+        try:
+            with transaction.atomic():
+                registration = serializer.save(
+                    person=self.request.user, amount_cents=config.price_cents
+                )
+        except IntegrityError:
+            # Two simultaneous requests (double click): the DB constraint wins.
+            raise already
 
         if config.price_cents > 0:
             try:
@@ -127,6 +139,15 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
             raise drf_serializers.ValidationError(
                 {"detail": "Inscrição já paga. Procure a organização do evento para solicitar o reembolso."}
             )
+        if registration.payment_status == PaymentStatus.PENDING and registration.asaas_payment_id:
+            # Kill the payment link, otherwise the person could still pay a
+            # registration that no longer exists.
+            try:
+                cancel_charge(registration.asaas_payment_id)
+            except AsaasError:
+                raise PaymentProviderUnavailable(
+                    "Não foi possível cancelar a cobrança agora. Tente novamente em alguns minutos."
+                )
         registration.payment_status = PaymentStatus.CANCELLED
         registration.save(update_fields=["payment_status", "updated_at"])
         broadcast_event_update(registration.event_id, "registration")
@@ -153,18 +174,14 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         except EventTicketConfig.DoesNotExist:
             capacity = None
 
-        try:
-            price = event.ticket_config.price_cents
-        except EventTicketConfig.DoesNotExist:
-            price = 0
-
         data = {
             "total": regs.exclude(payment_status=PaymentStatus.CANCELLED).count(),
             "confirmed": confirmed.count(),
             "pending": regs.filter(payment_status=PaymentStatus.PENDING).count(),
             "cancelled": regs.filter(payment_status=PaymentStatus.CANCELLED).count(),
             "capacity": capacity,
-            "revenue_cents": (confirmed.count() * price) if price else 0,
+            # What was actually charged, not count x today's price.
+            "revenue_cents": confirmed.aggregate(total=Sum("amount_cents"))["total"] or 0,
         }
         serializer = RegistrationStatsSerializer(data)
         return Response(serializer.data)

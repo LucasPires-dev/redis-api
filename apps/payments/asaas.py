@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 from datetime import timedelta
 
 import httpx
@@ -36,6 +37,18 @@ class AsaasError(Exception):
         super().__init__(f"Asaas {status_code}: {detail}")
 
 
+@contextmanager
+def _session():
+    """An Asaas client whose network failures (timeout, DNS, connection refused)
+    surface as AsaasError, like API errors do — callers handle a single type."""
+    try:
+        with _client() as client:
+            yield client
+    except httpx.HTTPError as exc:
+        logger.error("Asaas unreachable: %s", exc)
+        raise AsaasError(0, str(exc)) from exc
+
+
 def _check(response: httpx.Response) -> dict:
     if response.status_code >= 400:
         detail = response.text[:500]
@@ -46,7 +59,7 @@ def _check(response: httpx.Response) -> dict:
 
 def find_or_create_customer(email: str, name: str) -> str:
     """Returns the Asaas customer id for this email, creating one if needed."""
-    with _client() as client:
+    with _session() as client:
         resp = client.get("/customers", params={"email": email})
         data = _check(resp)
         if data.get("data"):
@@ -71,7 +84,7 @@ def create_charge(
     """Creates a charge (Pix + boleto). Returns the full Asaas payment object
     including `id`, `invoiceUrl`, `bankSlipUrl`, and `status`."""
     due_date = timezone.localdate() + timedelta(days=CHARGE_DUE_DAYS)
-    with _client() as client:
+    with _session() as client:
         resp = client.post(
             "/payments",
             json={
@@ -88,14 +101,20 @@ def create_charge(
 
 def get_pix_qr(payment_id: str) -> dict:
     """Returns the Pix QR code payload for a payment."""
-    with _client() as client:
+    with _session() as client:
         resp = client.get(f"/payments/{payment_id}/pixQrCode")
         return _check(resp)
 
 
 def get_payment_status(payment_id: str) -> str:
     """Returns the current status string from Asaas."""
-    with _client() as client:
+    with _session() as client:
         resp = client.get(f"/payments/{payment_id}")
         data = _check(resp)
         return data["status"]
+
+
+def cancel_charge(payment_id: str) -> None:
+    """Deletes a pending charge, so its payment link stops accepting payments."""
+    with _session() as client:
+        _check(client.delete(f"/payments/{payment_id}"))

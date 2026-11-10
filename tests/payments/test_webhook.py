@@ -96,6 +96,25 @@ def test_unknown_registration_is_acknowledged(api_client, pending_registration, 
     assert response.status_code == 200
 
 
+def test_late_payment_of_a_cancelled_registration_keeps_the_active_one(
+    api_client, regular_person, event, pending_registration, fake_asaas
+):
+    # Person cancelled, registered again, then paid the OLD charge anyway.
+    from apps.payments.models import EventRegistration
+
+    pending_registration.payment_status = PaymentStatus.CANCELLED
+    pending_registration.save()
+    active = EventRegistration.objects.create(event=event, person=regular_person, asaas_payment_id="pay_999")
+
+    response = post_webhook(api_client, pending_registration)
+
+    assert response.status_code == 200
+    pending_registration.refresh_from_db()
+    active.refresh_from_db()
+    assert pending_registration.payment_status == PaymentStatus.CANCELLED
+    assert active.payment_status == PaymentStatus.PENDING
+
+
 # --- Other status changes ---------------------------------------------------------------
 
 

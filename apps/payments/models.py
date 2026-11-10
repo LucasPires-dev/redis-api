@@ -31,6 +31,11 @@ class PaymentStatus(models.TextChoices):
     REFUNDED = "refunded", "Reembolsado"
 
 
+# Statuses that hold a spot. Cancelled/refunded registrations are kept as history
+# and don't block the person from registering again.
+ACTIVE_STATUSES = [PaymentStatus.PENDING, PaymentStatus.CONFIRMED]
+
+
 class EventRegistration(models.Model):
     """A person's registration for an event with ticket_config."""
 
@@ -44,6 +49,9 @@ class EventRegistration(models.Model):
     payment_status = models.CharField(
         max_length=16, choices=PaymentStatus.choices, default=PaymentStatus.PENDING
     )
+    # Price charged for this registration, frozen at registration time: revenue
+    # must not change when the organizers later edit the ticket price.
+    amount_cents = models.PositiveIntegerField(default=0)
     asaas_payment_id = models.CharField(max_length=100, blank=True)
     payment_url = models.URLField(blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
@@ -52,8 +60,12 @@ class EventRegistration(models.Model):
 
     class Meta:
         constraints = [
+            # One active registration per person and event (also guards against
+            # a double click creating two).
             models.UniqueConstraint(
-                fields=["event", "person"], name="unique_registration_per_event_person"
+                fields=["event", "person"],
+                condition=models.Q(payment_status__in=ACTIVE_STATUSES),
+                name="unique_active_registration_per_event_person",
             ),
         ]
         ordering = ["-created_at"]

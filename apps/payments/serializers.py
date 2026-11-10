@@ -54,11 +54,12 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
             "event_id",
             "person",
             "payment_status",
+            "amount_cents",
             "payment_url",
             "paid_at",
             "created_at",
         ]
-        read_only_fields = ["payment_status", "payment_url", "paid_at", "created_at"]
+        read_only_fields = ["payment_status", "amount_cents", "payment_url", "paid_at", "created_at"]
 
 
 class RegistrationStatsSerializer(serializers.Serializer):

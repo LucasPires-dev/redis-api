@@ -4,7 +4,6 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import (
@@ -20,7 +19,6 @@ from .permissions import (
     CoursePermission,
     LessonPermission,
     can_manage_class,
-    can_manage_course,
     scope_classes,
     scope_courses,
 )

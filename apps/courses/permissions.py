@@ -4,7 +4,7 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission
 from apps.churches.models import Campus
 from apps.churches.permissions import can_manage_campus
 
-from .models import CampusCoursesLeadership, Course, CourseClass, CourseGeneralLeadership
+from .models import CampusCoursesLeadership, Course, CourseGeneralLeadership
 
 # Access levels for courses (same general + local pattern as cells):
 # - manager / general courses leader: every course and class, on every campus;

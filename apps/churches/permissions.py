@@ -2,7 +2,6 @@ from django.db.models import Q
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from .models import (
-    Activity,
     Campus,
     CampusCellsLeadership,
     Cell,

@@ -113,6 +113,10 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         course_id = self.request.query_params.get("course_id")
         if course_id:
             qs = qs.filter(course_id=course_id)
+        # ?teaching=1: only the classes the person teaches ("Minhas turmas"),
+        # even for a coordinator who sees many more.
+        if self.request.query_params.get("teaching") in ("1", "true"):
+            qs = qs.filter(teachers__person=self.request.user)
         return scope_classes(qs, self.request.user)
 
     def perform_create(self, serializer):

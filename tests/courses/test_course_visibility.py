@@ -45,3 +45,20 @@ def test_course_flags(api_client, church, campus, courses_leader, regular_person
     data = {c["name"]: c for c in rows(api_client.get("/api/courses/"))}
     assert all(c["can_manage"] and c["can_add_class"] for c in data.values())
     assert local.id and church_wide.id
+
+
+def test_teaching_filter_lists_only_classes_taught(api_client, church, campus):
+    """A coordinator who also teaches: ?teaching=1 lists just the classes they teach."""
+    from apps.churches.choices import LeadershipRole
+    from apps.courses.models import CampusCoursesLeadership
+
+    person = make_person(email="coord.prof@ilan.church", name="Coord e Prof", campus=campus)
+    CampusCoursesLeadership.objects.create(campus=campus, person=person, role=LeadershipRole.LEADER)
+    course = Course.objects.create(church=church, campus=campus, name="Fundamentos")
+    taught = CourseClass.objects.create(course=course, campus=campus, name="Terça")
+    CourseClass.objects.create(course=course, campus=campus, name="Quinta")
+    CourseClassTeacher.objects.create(course_class=taught, person=person, role=TeacherRole.ASSISTANT)
+
+    api_client.force_authenticate(user=person)
+    assert {c["name"] for c in rows(api_client.get("/api/course-classes/"))} == {"Terça", "Quinta"}
+    assert [c["name"] for c in rows(api_client.get("/api/course-classes/?teaching=1"))] == ["Terça"]

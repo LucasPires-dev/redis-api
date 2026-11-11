@@ -27,6 +27,18 @@ def test_free_event_registration_is_confirmed_right_away(api_client, regular_per
     assert registration.payment_status == PaymentStatus.CONFIRMED
 
 
+def test_own_registrations_list_carries_the_event(api_client, regular_person, event, free_config):
+    """The "Minhas inscrições" tab lists them without fetching every event."""
+    client = auth(api_client, regular_person)
+    client.post(URL, {"event_id": str(event.id)}, format="json")
+
+    rows = client.get(URL).data["results"]
+
+    assert len(rows) == 1
+    assert rows[0]["event"]["id"] == str(event.id)
+    assert rows[0]["event"]["title"] == event.title
+
+
 def test_paid_event_creates_an_asaas_charge(api_client, regular_person, event, paid_config, fake_asaas):
     response = auth(api_client, regular_person).post(URL, {"event_id": str(event.id)}, format="json")
 

@@ -50,7 +50,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        qs = EventRegistration.objects.select_related("person", "event")
+        qs = EventRegistration.objects.select_related("person", "event", "event__campus")
         event_id = self.request.query_params.get("event")
         # ?mine=1: only the caller's own registrations, even for an event manager
         # (who otherwise gets everyone's, for the attendee list).

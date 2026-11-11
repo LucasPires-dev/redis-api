@@ -6,11 +6,13 @@ from rest_framework.response import Response
 from .choices import DemandStatus, RosterStatus
 from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
 from .permissions import (
+    PRODUCER_EVENT_TYPES,
     DemandPermission,
     EventChecklistItemPermission,
     EventPermission,
     EventRosterEntryPermission,
     RundownItemPermission,
+    is_any_event_producer,
     scope_demands,
     scope_events,
 )
@@ -31,14 +33,20 @@ class EventViewSet(viewsets.ModelViewSet):
     permission_classes = [EventPermission]
 
     def get_queryset(self):
-        qs = Event.objects.select_related("campus").prefetch_related("rundown_items__statuses")
+        qs = Event.objects.select_related("campus", "ticket_config").prefetch_related(
+            "rundown_items__statuses"
+        )
         campus_id = self.request.query_params.get("campus")
         if campus_id:
             qs = qs.filter(campus_id=campus_id)
         return scope_events(qs, self.request.user)
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        extra = {"created_by": self.request.user}
+        event_type = serializer.validated_data.get("event_type")
+        if event_type in PRODUCER_EVENT_TYPES and is_any_event_producer(self.request.user):
+            extra["producer"] = self.request.user
+        serializer.save(**extra)
 
 
 class RundownItemViewSet(viewsets.ModelViewSet):

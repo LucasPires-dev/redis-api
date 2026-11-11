@@ -1,11 +1,11 @@
-"""Autenticação de conexões WebSocket via JWT.
+"""JWT authentication for WebSocket connections.
 
-O restante da API usa `rest_framework_simplejwt.authentication.JWTAuthentication`
-(header `Authorization: Bearer <token>`), mas o JS `WebSocket` do navegador não
-permite setar headers customizados no handshake — por isso o token vem via
-query string (`?token=<access>`), mesmo padrão usado por outras libs de
-WebSocket+JWT. Reaproveita `JWTAuthentication` para validar o token e resolver
-a `Person`, em vez de reimplementar a lógica de validação/lookup.
+The rest of the API uses `rest_framework_simplejwt.authentication.JWTAuthentication`
+(`Authorization: Bearer <token>` header), but the browser's JS `WebSocket` doesn't
+allow custom headers on the handshake — so the token comes in the query string
+(`?token=<access>`), the same pattern other WebSocket+JWT libs use. Reuses
+`JWTAuthentication` to validate the token and resolve the `Person`, instead of
+reimplementing the validation/lookup logic.
 """
 
 from urllib.parse import parse_qs

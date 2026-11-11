@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
+from .models import Demand, Event, EventChecklistItem, EventProducerAssignment, EventRosterEntry, RundownItem, RundownItemStatus
 
 
 class RundownItemInline(admin.TabularInline):
@@ -56,3 +56,10 @@ class EventChecklistItemAdmin(admin.ModelAdmin):
     list_display = ["text", "event", "ministry_kind", "is_done"]
     list_filter = ["ministry_kind", "is_done"]
     autocomplete_fields = ["event", "done_by", "created_by"]
+
+
+@admin.register(EventProducerAssignment)
+class EventProducerAssignmentAdmin(admin.ModelAdmin):
+    list_display = ["person", "campus", "created_at"]
+    list_filter = ["campus"]
+    autocomplete_fields = ["person", "campus"]

@@ -1,8 +1,10 @@
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework import serializers
 
+from . import meeting_calendar
 from .choices import LeadershipRole
 from .models import (
     Activity,
@@ -256,6 +258,8 @@ class CellSerializer(serializers.ModelSerializer):
     leaders = serializers.SerializerMethodField()
     co_leaders = serializers.SerializerMethodField()
     member_count = serializers.IntegerField(source="members.count", read_only=True)
+    # Past scheduled meetings nobody registered (see meeting_calendar.py).
+    pending_meetings = serializers.SerializerMethodField()
     # Human label for `meeting_day` (e.g. "Quarta-feira"); empty string when unset.
     meeting_day_display = serializers.CharField(source="get_meeting_day_display", read_only=True)
     # "HH:MM" instead of DRF's default "HH:MM:SS" — seconds are never used here.
@@ -286,6 +290,7 @@ class CellSerializer(serializers.ModelSerializer):
             "leaders",
             "co_leaders",
             "member_count",
+            "pending_meetings",
             "can_manage",
             "can_coordinate",
         ]
@@ -301,6 +306,9 @@ class CellSerializer(serializers.ModelSerializer):
     def get_can_manage(self, obj):
         request = self.context.get("request")
         return bool(request) and can_manage_cell(request.user, obj)
+
+    def get_pending_meetings(self, obj):
+        return meeting_calendar.pending_count(obj, obj.meetings.all())
 
     def get_can_coordinate(self, obj):
         request = self.context.get("request")
@@ -360,6 +368,8 @@ class CellMeetingSerializer(serializers.ModelSerializer):
             "cell",
             "cell_id",
             "date",
+            "held",
+            "cancel_reason",
             "notes",
             "attendees",
             "attendee_ids",
@@ -384,6 +394,24 @@ class CellMeetingSerializer(serializers.ModelSerializer):
         if (start and date < start) or (end and date > end):
             raise serializers.ValidationError(
                 {"date": "A data do encontro precisa estar dentro do período da célula."}
+            )
+
+        held = attrs["held"] if "held" in attrs else getattr(self.instance, "held", True)
+        if not held:
+            reason = attrs.get("cancel_reason", getattr(self.instance, "cancel_reason", "")).strip()
+            if not reason:
+                raise serializers.ValidationError(
+                    {"cancel_reason": "Informe por que o encontro não aconteceu."}
+                )
+            # A meeting that didn't happen has no attendance.
+            attrs.update(cancel_reason=reason, attendees=[], visitors_count=0)
+            return attrs
+
+        attrs["cancel_reason"] = ""
+        if date > timezone.localdate():
+            raise serializers.ValidationError(
+                {"date": "A presença só pode ser registrada depois do encontro. "
+                         "Para uma data futura, marque que o encontro não vai acontecer."}
             )
 
         if "attendees" in attrs:

@@ -1,6 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -16,6 +16,7 @@ from apps.courses.permissions import can_assign_campus_courses_leader
 from apps.production.models import EventProducerAssignment
 from apps.production.permissions import can_assign_campus_event_producer
 
+from . import meeting_calendar
 from .choices import ActivityKind, MinistryKind
 from .filters import CellFilter, CellMeetingFilter
 from .models import (
@@ -529,9 +530,40 @@ class CellViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Cell.objects.select_related("campus", "campus__church", "season").prefetch_related(
-            "leaderships__person", "members"
+            "leaderships__person",
+            "members",
+            # Just what the pending-meetings count needs.
+            Prefetch("meetings", queryset=CellMeeting.objects.only("id", "cell_id", "date", "held")),
         )
         return scope_cells(qs, self.request.user)
+
+    @action(detail=True, methods=["get"])
+    def calendar(self, request, pk=None):
+        """Every scheduled date of the cell's period (from its meeting day) with
+        its status — registered, not held, pending, today or upcoming — plus
+        extra meetings outside the schedule, newest first, and a summary."""
+        cell = self.get_object()
+        # A fresh query: cell.meetings carries the list's slim prefetch (only()).
+        meetings = list(
+            CellMeeting.objects.filter(cell=cell)
+            .select_related("created_by")
+            .prefetch_related("attendees")
+        )
+        entries = meeting_calendar.build_calendar(cell, meetings)
+        return Response(
+            {
+                "entries": [
+                    {
+                        "date": entry.date,
+                        "scheduled_date": entry.scheduled_date,
+                        "status": entry.status,
+                        "meeting": CellMeetingSerializer(entry.meeting).data if entry.meeting else None,
+                    }
+                    for entry in entries
+                ],
+                "summary": meeting_calendar.summarize(entries),
+            }
+        )
 
     def perform_create(self, serializer):
         if not can_coordinate_campus_cells(self.request.user, serializer.validated_data["campus"]):
@@ -679,6 +711,13 @@ class CellMeetingViewSet(viewsets.ModelViewSet):
         if CellMeeting.objects.filter(cell=cell, date=serializer.validated_data["date"]).exists():
             raise ValidationError({"date": "Já existe um encontro registrado nesta data."})
         serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        meeting = serializer.instance
+        new_date = serializer.validated_data.get("date", meeting.date)
+        if CellMeeting.objects.filter(cell=meeting.cell, date=new_date).exclude(pk=meeting.pk).exists():
+            raise ValidationError({"date": "Já existe um encontro registrado nesta data."})
+        serializer.save()
 
 
 class TeamViewSet(viewsets.ModelViewSet):

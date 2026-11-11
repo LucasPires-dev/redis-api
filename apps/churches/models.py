@@ -485,11 +485,18 @@ class CellMeeting(models.Model):
     `attendees` are people registered in the system (members or leaders of the
     cell, checked in the serializer); first-time guests who aren't registered
     are only counted in `visitors_count`.
+
+    A record with `held=False` says the meeting didn't happen on that date
+    (holiday, cancelled), so the date stops showing as pending in the cell's
+    calendar (see meeting_calendar.py). It has no attendance.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     cell = models.ForeignKey(Cell, on_delete=models.CASCADE, related_name="meetings")
     date = models.DateField()
+    held = models.BooleanField(default=True)
+    # Why it didn't happen (required when held=False, empty otherwise).
+    cancel_reason = models.CharField(max_length=200, blank=True)
     # Free notes: topic, prayer requests, anything worth remembering.
     notes = models.TextField(blank=True)
     # Reverse access: person.attended_cell_meetings.all()

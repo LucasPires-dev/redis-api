@@ -35,6 +35,7 @@ from apps.payments.asaas import (
     find_or_create_customer,
     refund_payment,
 )
+from apps.people.cpf import require_cpf
 
 from .choices import (
     CLOSED_PAYMENT_STATUSES,
@@ -170,7 +171,8 @@ def _open_charge(enrollment, installments):
     """Creates an Asaas charge for what is still owed (raises AsaasError)."""
     balance = enrollment.amount_cents - enrollment.paid_cents
     course_class = enrollment.course_class
-    customer_id = find_or_create_customer(email=enrollment.person.email, name=enrollment.person.name)
+    person = enrollment.person
+    customer_id = find_or_create_customer(email=person.email, name=person.name, cpf=person.cpf)
     charge = create_charge(
         customer_id=customer_id,
         amount_cents=balance,
@@ -228,6 +230,8 @@ def enroll(course_class, person, choices, installments=1, *, self_service, send_
         raise serializers.ValidationError({"items": "O total precisa ser de pelo menos R$ 5,00."})
     if gross:
         check_installments(course_class, gross, installments)
+        if send_charge:
+            require_cpf(person)
 
     left = seats_left(course_class)
     if left is not None and left <= 0:
@@ -280,6 +284,7 @@ def generate_charge(enrollment, installments=None):
     balance = enrollment.amount_cents - enrollment.paid_cents
     installments = installments or (enrollment.installments if enrollment.paid_cents == 0 else 1)
     check_installments(enrollment.course_class, balance, installments)
+    require_cpf(enrollment.person)
     try:
         _cancel_open_charge(enrollment)
         _open_charge(enrollment, installments)
@@ -395,11 +400,18 @@ def refund_allowed(enrollment):
     return course_class.start_date is None or timezone.localdate() < course_class.start_date
 
 
-def cancel(enrollment, *, by_coordinator, force=False, note=""):
+MANUAL_REFUND_MESSAGE = (
+    "O Asaas não estorna este pagamento (só cartão e Pix são estornados; boleto não). "
+    "Devolva o valor por fora, por exemplo com um Pix da igreja, e confirme a devolução."
+)
+
+
+def cancel(enrollment, *, by_coordinator, force=False, note="", manual_refund=False):
     """Cancels the enrollment and frees the seat. Money already paid is
     refunded (only by a coordinator, and after the class started only with
     `force`). Online payments are refunded in Asaas; hand-recorded ones are
-    marked as returned in person."""
+    marked as returned in person. Asaas can't refund a boleto: that one must be
+    returned by hand, which the coordinator confirms with `manual_refund`."""
     if enrollment.payment_status in CLOSED_PAYMENT_STATUSES:
         return enrollment
     paid = enrollment.payments.filter(refunded_at__isnull=True)
@@ -420,15 +432,25 @@ def cancel(enrollment, *, by_coordinator, force=False, note=""):
 
     now = timezone.now()
     for payment in paid:
+        refund_note = note
         if payment.method == PaymentMethod.ASAAS:
             try:
                 refund_payment(payment.asaas_payment_id)
-            except AsaasError:
+            except AsaasError as exc:
                 # Payments refunded so far stay marked; retrying continues from here.
                 enrollment.save()
-                raise ProviderUnavailable("Não foi possível fazer o reembolso agora. Tente novamente em alguns minutos.")
+                if exc.status_code != 400:
+                    raise ProviderUnavailable(
+                        "Não foi possível fazer o reembolso agora. Tente novamente em alguns minutos."
+                    )
+                # Asaas refuses it for good (a boleto): returned by hand.
+                if not manual_refund:
+                    raise serializers.ValidationError(
+                        {"detail": MANUAL_REFUND_MESSAGE, "code": "manual_refund_required"}
+                    )
+                refund_note = f"Devolvido por fora{f' — {note}' if note else ''}"[:200]
         payment.refunded_at = now
-        payment.refund_note = note
+        payment.refund_note = refund_note
         payment.save(update_fields=["refunded_at", "refund_note"])
 
     refunded = enrollment.payments.filter(refunded_at__isnull=False).aggregate(t=Sum("amount_cents"))["t"] or 0

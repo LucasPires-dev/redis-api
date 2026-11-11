@@ -11,6 +11,8 @@ from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.people.cpf import apply_cpf
+
 from . import billing
 from .choices import EnrollmentStatus
 from .models import (
@@ -193,6 +195,7 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         # A paid enrollment is a financial act: only the coordinators.
         if course_class.is_paid and not can_manage_class_finances(request.user, course_class):
             raise PermissionDenied("Só a coordenação do curso matricula em turmas pagas.")
+        apply_cpf(person, data.get("cpf", ""))
         enrollment = _billing(
             billing.enroll,
             course_class,
@@ -305,6 +308,7 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             raise PermissionDenied()
         ser = EnrollInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        apply_cpf(request.user, ser.validated_data.get("cpf", ""))
         enrollment = _billing(
             billing.enroll,
             course_class,
@@ -386,6 +390,7 @@ class EnrollmentViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewse
         self._require_owner_or_finances(enrollment)
         ser = ChargeInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        apply_cpf(enrollment.person, ser.validated_data.get("cpf", ""))
         _billing(billing.generate_charge, enrollment, ser.validated_data.get("installments"))
         return self._respond(enrollment)
 
@@ -402,6 +407,7 @@ class EnrollmentViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewse
             by_coordinator=is_finances,
             force=is_finances and ser.validated_data["force"],
             note=ser.validated_data.get("note", ""),
+            manual_refund=is_finances and ser.validated_data["manual_refund"],
         )
         return self._respond(enrollment)
 

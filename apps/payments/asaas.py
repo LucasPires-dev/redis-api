@@ -57,16 +57,23 @@ def _check(response: httpx.Response) -> dict:
     return response.json()
 
 
-def find_or_create_customer(email: str, name: str) -> str:
-    """Returns the Asaas customer id for this email, creating one if needed."""
+def find_or_create_customer(email: str, name: str, cpf: str = "") -> str:
+    """Returns the Asaas customer id for this email, creating one if needed.
+    Asaas only charges customers with a CPF/CNPJ, so it is set (or updated)
+    when given."""
     with _session() as client:
         resp = client.get("/customers", params={"email": email})
         data = _check(resp)
         if data.get("data"):
-            return data["data"][0]["id"]
+            customer = data["data"][0]
+            if cpf and customer.get("cpfCnpj") != cpf:
+                _check(client.post(f"/customers/{customer['id']}", json={"cpfCnpj": cpf}))
+            return customer["id"]
 
-        resp = client.post("/customers", json={"name": name, "email": email})
-        data = _check(resp)
+        payload = {"name": name, "email": email}
+        if cpf:
+            payload["cpfCnpj"] = cpf
+        data = _check(client.post("/customers", json=payload))
         return data["id"]
 
 

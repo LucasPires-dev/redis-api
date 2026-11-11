@@ -26,12 +26,14 @@ def as_user(api_client, person):
     return api_client
 
 
-def self_enroll(api_client, course_class, items=(), installments=1):
-    return api_client.post(
-        f"/api/course-classes/{course_class.id}/enroll/",
-        {"items": list(items), "installments": installments},
-        format="json",
-    )
+OTHER_CPF = "111.444.777-35"
+
+
+def self_enroll(api_client, course_class, items=(), installments=1, cpf=None):
+    body = {"items": list(items), "installments": installments}
+    if cpf is not None:
+        body["cpf"] = cpf
+    return api_client.post(f"/api/course-classes/{course_class.id}/enroll/", body, format="json")
 
 
 def tshirt(course_class, size="M"):
@@ -208,10 +210,10 @@ def test_full_class_rejects_and_expired_reservation_frees_the_seat(
     paid_class.max_capacity = 1
     paid_class.save()
     self_enroll(as_user(api_client, student), paid_class)
-    assert self_enroll(as_user(api_client, regular_person), paid_class).status_code == 400
+    assert self_enroll(as_user(api_client, regular_person), paid_class, cpf=OTHER_CPF).status_code == 400
 
     Enrollment.objects.filter(person=student).update(expires_at=timezone.now() - timedelta(minutes=1))
-    response = self_enroll(as_user(api_client, regular_person), paid_class)
+    response = self_enroll(as_user(api_client, regular_person), paid_class, cpf=OTHER_CPF)
     assert response.status_code == 201, response.data
     expired = Enrollment.objects.get(person=student)
     assert expired.payment_status == PS.EXPIRED
@@ -512,7 +514,7 @@ def test_teacher_marks_material_delivered(api_client, teacher, pending):
 
 def test_finance_summary_and_export(api_client, courses_leader, student, regular_person, paid_class, fake_asaas):
     self_enroll(as_user(api_client, student), paid_class, [tshirt(paid_class, "G")])
-    self_enroll(as_user(api_client, regular_person), paid_class, [tshirt(paid_class, "M")])
+    self_enroll(as_user(api_client, regular_person), paid_class, [tshirt(paid_class, "M")], cpf=OTHER_CPF)
     paid = Enrollment.objects.get(person=student)
     webhook(api_client, "PAYMENT_RECEIVED", paid, "pay_1", 65.0)
     ClassExpense.objects.create(course_class=paid_class, description="Apostilas", amount_cents=4000, date=TODAY)
@@ -574,3 +576,73 @@ def test_fee_item_options_are_shown_to_members(api_client, student, paid_class):
     shirt = next(i for i in data[0]["fee_items"] if i["name"] == "Camiseta")
     assert shirt["options"] == ["P", "M", "G"]
     assert ClassFeeItem.objects.count() == 2
+
+
+# ── CPF (Asaas only charges customers with one) ──────────────────────────────
+
+
+def test_paid_self_enrollment_asks_for_the_cpf(api_client, regular_person, paid_class, free_class, fake_asaas):
+    as_user(api_client, regular_person)
+    response = self_enroll(api_client, paid_class)
+    assert response.status_code == 400
+    assert "cpf" in response.data
+    assert not Enrollment.objects.filter(person=regular_person).exists()
+    assert fake_asaas["charges"] == []
+    # A free class needs no CPF.
+    assert self_enroll(api_client, free_class).status_code == 201
+
+
+def test_cpf_typed_when_enrolling_is_kept(api_client, regular_person, paid_class, fake_asaas):
+    response = self_enroll(as_user(api_client, regular_person), paid_class, cpf=OTHER_CPF)
+    assert response.status_code == 201, response.data
+    regular_person.refresh_from_db()
+    assert regular_person.cpf == "11144477735"
+    assert fake_asaas["customers"][-1]["cpf"] == "11144477735"
+    assert api_client.get("/api/auth/me/").data["has_cpf"] is True
+
+
+def test_coordinator_needs_the_cpf_only_for_an_online_link(
+    api_client, courses_leader, regular_person, paid_class, fake_asaas
+):
+    as_user(api_client, courses_leader)
+    url = f"/api/course-classes/{paid_class.id}/enrollments/"
+    response = api_client.post(url, {"person_id": str(regular_person.id), "send_charge": True}, format="json")
+    assert response.status_code == 400 and "cpf" in response.data
+    # Paying at the office: no CPF needed.
+    response = api_client.post(url, {"person_id": str(regular_person.id)}, format="json")
+    assert response.status_code == 201, response.data
+    # A link later, with the CPF typed by the coordinator.
+    enrollment = Enrollment.objects.get(person=regular_person)
+    pay = f"/api/course-enrollments/{enrollment.id}/pay/"
+    assert api_client.post(pay, {}, format="json").status_code == 400
+    assert api_client.post(pay, {"cpf": OTHER_CPF}, format="json").status_code == 200
+
+
+# ── Refunds Asaas can't make (boleto) ────────────────────────────────────────
+
+
+def test_boleto_refund_is_confirmed_as_returned_by_hand(api_client, courses_leader, pending, fake_asaas):
+    webhook(api_client, "PAYMENT_RECEIVED", pending, "pay_1", 30.0)
+    fake_asaas["refund_fails"] = True
+    fake_asaas["refund_status"] = 400  # "only card and Pix can be refunded"
+    as_user(api_client, courses_leader)
+    url = f"/api/course-enrollments/{pending.id}/cancel/"
+
+    response = api_client.post(url, {}, format="json")
+    assert response.status_code == 400
+    assert response.data["code"] == "manual_refund_required"
+    pending.refresh_from_db()
+    assert pending.payment_status == PS.PAID
+
+    response = api_client.post(url, {"manual_refund": True, "note": "Pix da igreja"}, format="json")
+    assert response.status_code == 200, response.data
+    assert response.data["payment_status"] == PS.REFUNDED
+    assert response.data["payments"][0]["refund_note"] == "Devolvido por fora — Pix da igreja"
+
+
+def test_member_cannot_flag_a_manual_refund(api_client, student, pending, fake_asaas):
+    response = as_user(api_client, student).post(
+        f"/api/course-enrollments/{pending.id}/cancel/", {"manual_refund": True}, format="json"
+    )
+    assert response.status_code == 200  # unpaid: a plain cancellation
+    assert response.data["payment_status"] == PS.CANCELLED

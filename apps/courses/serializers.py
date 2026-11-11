@@ -3,6 +3,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from apps.churches.serializers import CampusMiniSerializer
+from apps.people.cpf import CpfField
 
 from . import billing
 from .choices import SEAT_HOLDING_PAYMENT_STATUSES, EnrollmentStatus, TeacherRole
@@ -334,6 +335,8 @@ class EnrollInputSerializer(serializers.Serializer):
 
     items = FeeChoiceSerializer(many=True, required=False, default=list)
     installments = serializers.IntegerField(min_value=1, max_value=12, default=1)
+    # Needed by Asaas for an online charge; kept on the person (see apps.people.cpf).
+    cpf = CpfField()
 
 
 class EnrollmentInputSerializer(EnrollInputSerializer):
@@ -359,11 +362,14 @@ class ManualPaymentInputSerializer(serializers.Serializer):
 
 class ChargeInputSerializer(serializers.Serializer):
     installments = serializers.IntegerField(min_value=1, max_value=12, required=False)
+    cpf = CpfField()
 
 
 class CancelEnrollmentInputSerializer(serializers.Serializer):
     # Refund even after the class started (overrides the class's rule).
     force = serializers.BooleanField(default=False)
+    # The coordinator returned by hand what Asaas can't refund (a boleto).
+    manual_refund = serializers.BooleanField(default=False)
     note = serializers.CharField(required=False, allow_blank=True, max_length=200)
 
 

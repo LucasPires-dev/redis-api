@@ -72,7 +72,7 @@ def teacher(paid_class, campus):
 
 @pytest.fixture
 def student(campus):
-    return make_person(email="aluno@ilan.church", name="Aluno", campus=campus)
+    return make_person(email="aluno@ilan.church", name="Aluno", campus=campus, cpf="52998224725")
 
 
 def item(course_class, name):
@@ -95,7 +95,8 @@ def fake_asaas(monkeypatch):
         "refunded": [],
     }
 
-    def find_or_create_customer(email, name):
+    def find_or_create_customer(email, name, cpf=""):
+        state.setdefault("customers", []).append({"email": email, "cpf": cpf})
         return "cus_1"
 
     def create_charge(customer_id, amount_cents, description, external_reference, *, due_days=3, installments=1):
@@ -132,7 +133,7 @@ def fake_asaas(monkeypatch):
 
     def refund_payment(payment_id):
         if state["refund_fails"]:
-            raise AsaasError(400, "no")
+            raise AsaasError(state.get("refund_status", 0), "no")
         state["refunded"].append(payment_id)
 
     def get_payment_status(payment_id):

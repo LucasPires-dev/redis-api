@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
@@ -79,6 +80,15 @@ def can_manage_class(person, course_class) -> bool:
     return course_class.teachers.filter(person=person).exists()
 
 
+def can_manage_class_finances(person, course_class) -> bool:
+    """Fees, scholarships, payments, refunds and expenses: the course's and the
+    campus's coordinators — not the teachers (they handle lessons, attendance
+    and material delivery)."""
+    if can_manage_course(person, course_class.course):
+        return True
+    return can_coordinate_campus_courses(person, course_class.campus)
+
+
 def scope_courses(qs, person):
     """Courses visible to the person: everything for church-wide coordinators;
     otherwise church-wide courses plus the courses of campuses they coordinate."""
@@ -153,10 +163,23 @@ class CourseClassPermission(BasePermission):
 
 
 class LessonPermission(BasePermission):
-    """Read: anyone authenticated. Write: can_manage_class on the lesson's class."""
+    """Read: whoever sees the class (queryset scoped in the view). Create and
+    write: can_manage_class on the lesson's class."""
 
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated)
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if view.action == "create":
+            from .models import CourseClass
+
+            try:
+                course_class = CourseClass.objects.filter(pk=request.data.get("course_class_id")).first()
+            except (ValueError, DjangoValidationError):  # not a UUID
+                course_class = None
+            if course_class is None:
+                return True  # let the serializer produce a 400
+            return can_manage_class(request.user, course_class)
+        return True
 
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:

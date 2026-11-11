@@ -260,6 +260,9 @@ class CellSerializer(serializers.ModelSerializer):
     member_count = serializers.IntegerField(source="members.count", read_only=True)
     # Past scheduled meetings nobody registered (see meeting_calendar.py).
     pending_meetings = serializers.SerializerMethodField()
+    # Required fields still empty (cells created before they were required);
+    # while any is missing the cell isn't active.
+    missing_fields = serializers.ListField(read_only=True)
     # Human label for `meeting_day` (e.g. "Quarta-feira"); empty string when unset.
     meeting_day_display = serializers.CharField(source="get_meeting_day_display", read_only=True)
     # "HH:MM" instead of DRF's default "HH:MM:SS" — seconds are never used here.
@@ -291,6 +294,7 @@ class CellSerializer(serializers.ModelSerializer):
             "co_leaders",
             "member_count",
             "pending_meetings",
+            "missing_fields",
             "can_manage",
             "can_coordinate",
         ]
@@ -323,6 +327,16 @@ class CellSerializer(serializers.ModelSerializer):
         campus = current("campus")
         season = current("season")
         start, end = current("start_date"), current("end_date")
+
+        # Day, time and audience are required on create, can't be cleared, and
+        # editing an older cell that lacks them means filling them in.
+        missing = {
+            field: message
+            for field, message in Cell.REQUIRED_FIELDS.items()
+            if current(field) in (None, "")
+        }
+        if missing:
+            raise serializers.ValidationError(missing)
 
         if season and campus and season.church_id != campus.church_id:
             raise serializers.ValidationError(
@@ -388,6 +402,11 @@ class CellMeetingSerializer(serializers.ModelSerializer):
         cell = attrs.get("cell") or self.instance.cell
         if self.instance and "cell" in attrs and attrs["cell"] != self.instance.cell:
             raise serializers.ValidationError({"cell_id": "Não é possível mover um encontro de célula."})
+        if not self.instance and not cell.is_complete:
+            raise serializers.ValidationError(
+                {"cell_id": "A célula não está ativa: defina o dia, o horário e o público-alvo "
+                            "antes de registrar encontros."}
+            )
 
         date = attrs.get("date") or self.instance.date
         start, end = cell.effective_start, cell.effective_end

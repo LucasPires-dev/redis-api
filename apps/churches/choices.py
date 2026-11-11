@@ -29,6 +29,19 @@ PRODUCTION_MINISTRY_KINDS = {
 }
 
 
+class CellAudience(models.TextChoices):
+    """Who a célula is for. Same values as the audience-facing MinistryKinds, plus
+    an explicit "todos" — a mixed cell is a choice, not a missing field."""
+
+    TODOS = "todos", "Todos"
+    JOVENS = MinistryKind.JOVENS.value, MinistryKind.JOVENS.label
+    CRIANCAS = MinistryKind.CRIANCAS.value, MinistryKind.CRIANCAS.label
+    ADOLESCENTES = MinistryKind.ADOLESCENTES.value, MinistryKind.ADOLESCENTES.label
+    MULHERES = MinistryKind.MULHERES.value, MinistryKind.MULHERES.label
+    HOMENS = MinistryKind.HOMENS.value, MinistryKind.HOMENS.label
+    CASAIS = MinistryKind.CASAIS.value, MinistryKind.CASAIS.label
+
+
 class LeadershipRole(models.TextChoices):
     LEADER = "leader", "Líder"
     CO_LEADER = "co_leader", "Colíder"

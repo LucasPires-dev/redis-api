@@ -606,6 +606,11 @@ class CellViewSet(viewsets.ModelViewSet):
             raise ValidationError({"season_id": "A temporada precisa ser da mesma igreja do campus."})
         if season.pk == cell.season_id:
             raise ValidationError({"season_id": "A célula já é desta temporada."})
+        if not cell.is_complete:
+            # The new cell copies these fields; it would be born incomplete.
+            raise ValidationError(
+                "Defina o dia, o horário e o público-alvo da célula antes de renová-la."
+            )
         if Cell.objects.filter(campus=cell.campus, season=season, name=cell.name).exists():
             raise ValidationError({"season_id": f"Já existe a célula \"{cell.name}\" nesta temporada."})
 

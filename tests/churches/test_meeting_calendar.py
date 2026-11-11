@@ -7,7 +7,7 @@ from django.utils import timezone
 from apps.churches import meeting_calendar as mc
 from apps.churches.choices import LeadershipRole
 from apps.churches.models import Cell, CellLeadership, CellMeeting, Season
-from tests.conftest import make_person
+from tests.conftest import make_cell, make_person
 
 TODAY = timezone.localdate()
 
@@ -16,7 +16,7 @@ TODAY = timezone.localdate()
 # August 2026: the 3rd is a Monday, so Wednesdays are 5, 12, 19 and 26.
 
 
-def make_cell(meeting_day=3):
+def unsaved_cell(meeting_day=3):
     return Cell(name="GT", start_date=date(2026, 8, 3), end_date=date(2026, 8, 31), meeting_day=meeting_day)
 
 
@@ -32,15 +32,15 @@ def statuses(entries):
 
 
 def test_scheduled_dates_follow_the_meeting_day():
-    assert [d.day for d in mc.scheduled_dates(make_cell())] == [5, 12, 19, 26]
+    assert [d.day for d in mc.scheduled_dates(unsaved_cell())] == [5, 12, 19, 26]
 
 
 def test_no_meeting_day_means_no_scheduled_dates():
-    assert mc.scheduled_dates(make_cell(meeting_day=None)) == []
+    assert mc.scheduled_dates(unsaved_cell(meeting_day=None)) == []
 
 
 def test_statuses_by_date():
-    entries = mc.build_calendar(make_cell(), [meeting(5)], today=date(2026, 8, 19))
+    entries = mc.build_calendar(unsaved_cell(), [meeting(5)], today=date(2026, 8, 19))
     assert statuses(entries) == [
         (26, 26, mc.UPCOMING),
         (19, 19, mc.TODAY),
@@ -51,26 +51,26 @@ def test_statuses_by_date():
 
 def test_meeting_moved_within_the_week_covers_the_scheduled_date():
     # Wednesday the 12th moved to Thursday the 13th.
-    entries = mc.build_calendar(make_cell(), [meeting(13)], today=date(2026, 8, 20))
+    entries = mc.build_calendar(unsaved_cell(), [meeting(13)], today=date(2026, 8, 20))
     assert (13, 12, mc.REGISTERED) in statuses(entries)
     assert mc.summarize(entries)["pending"] == 2  # 5 and 19
 
 
 def test_second_meeting_in_the_same_week_is_extra():
-    entries = mc.build_calendar(make_cell(), [meeting(12), meeting(15)], today=date(2026, 8, 20))
+    entries = mc.build_calendar(unsaved_cell(), [meeting(12), meeting(15)], today=date(2026, 8, 20))
     assert (15, None, mc.REGISTERED) in statuses(entries)
     assert (12, 12, mc.REGISTERED) in statuses(entries)
 
 
 def test_changing_the_day_mid_season_keeps_past_weeks_covered():
     # Met on Tuesdays (4, 11) before the cell moved to Wednesdays.
-    entries = mc.build_calendar(make_cell(), [meeting(4), meeting(11)], today=date(2026, 8, 20))
+    entries = mc.build_calendar(unsaved_cell(), [meeting(4), meeting(11)], today=date(2026, 8, 20))
     assert mc.summarize(entries)["pending"] == 1  # only the 19th
 
 
 def test_not_held_is_not_pending_and_stays_out_of_the_average():
     entries = mc.build_calendar(
-        make_cell(),
+        unsaved_cell(),
         [meeting(5, attendees=6, visitors=2), meeting(12, held=False)],
         today=date(2026, 8, 20),
     )
@@ -96,7 +96,7 @@ def season(church):
 @pytest.fixture
 def cell(campus, season):
     # Meets on today's weekday: scheduled 28, 21, 14 and 7 days ago, today, and ahead.
-    return Cell.objects.create(campus=campus, season=season, name="GT Vida", meeting_day=TODAY.isoweekday())
+    return make_cell(campus=campus, season=season, name="GT Vida", meeting_day=TODAY.isoweekday())
 
 
 @pytest.fixture

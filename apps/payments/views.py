@@ -66,6 +66,10 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         event = serializer.validated_data["event"]
         cpf = serializer.validated_data.pop("cpf", "")
 
+        # Only events the person can see (knowing the id is not enough).
+        if not scope_events(Event.objects.filter(pk=event.pk), self.request.user).exists():
+            raise drf_serializers.ValidationError({"event_id": "Evento não encontrado."})
+
         try:
             config = event.ticket_config
         except EventTicketConfig.DoesNotExist:

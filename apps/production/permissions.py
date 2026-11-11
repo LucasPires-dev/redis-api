@@ -12,14 +12,15 @@ PRODUCER_EVENT_TYPES = {EventType.CONFERENCE, EventType.SPECIAL_SERVICE, EventTy
 
 
 def is_event_producer(person, campus=None) -> bool:
-    """True if person is an assigned EventProducer. Church-wide assignments
-    (campus=null) cover any campus."""
+    """True if person produces events at `campus`. Church-wide assignments
+    (campus=null) cover any campus. A church-wide event (campus=None) belongs
+    to the church-wide producers only — a campus producer doesn't produce it."""
     from .models import EventProducerAssignment
 
     qs = EventProducerAssignment.objects.filter(person=person)
-    if campus is not None:
-        qs = qs.filter(Q(campus=campus) | Q(campus__isnull=True))
-    return qs.exists()
+    if campus is None:
+        return qs.filter(campus__isnull=True).exists()
+    return qs.filter(Q(campus=campus) | Q(campus__isnull=True)).exists()
 
 
 def is_general_event_producer(person) -> bool:
@@ -164,9 +165,12 @@ def scope_events(qs, person):
     """Visible events: everything for the manager; the general regular service
     (no campus/kind) is visible to anyone authenticated; any other event, to whoever
     created it, produced it, leads the campus, leads (generally or locally) the
-    owning ministry, or is a member of the owning ministry. Producers see every
-    event at their assigned campuses."""
-    if person.is_manager:
+    owning ministry, or is a member of the owning ministry. Production teams
+    (media, sound, …) see their campus's events. Events open for registration
+    are visible to everyone at their campus. Campus producers see every event
+    at their campuses; church-wide producers, every event."""
+    if person.is_manager or is_general_event_producer(person):
+        # A church-wide producer produces on every campus, so sees every event.
         return qs
     kinds = general_led_kinds(person)
     condition = (
@@ -184,18 +188,20 @@ def scope_events(qs, person):
     )
     if kinds:
         condition |= Q(ministry_kind__in=kinds)
+    # Events open for registration are for the whole campus: its members must
+    # find them to sign up (a paid conference at their campus, for instance).
+    if person.campus_id:
+        condition |= Q(campus_id=person.campus_id, ticket_config__isnull=False)
 
     from .models import EventProducerAssignment
 
-    producer_assignments = EventProducerAssignment.objects.filter(person=person)
-    if producer_assignments.exists():
-        campus_ids = list(
-            producer_assignments.exclude(campus__isnull=True).values_list("campus_id", flat=True)
-        )
-        if producer_assignments.filter(campus__isnull=True).exists():
-            condition |= Q()  # church-wide producer sees everything
-        elif campus_ids:
-            condition |= Q(campus_id__in=campus_ids)
+    # Campus producers see every event at their campuses (church-wide ones
+    # were handled above).
+    campus_ids = list(
+        EventProducerAssignment.objects.filter(person=person, campus__isnull=False).values_list("campus_id", flat=True)
+    )
+    if campus_ids:
+        condition |= Q(campus_id__in=campus_ids)
 
     return qs.filter(condition).distinct()
 

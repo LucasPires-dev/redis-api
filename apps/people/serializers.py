@@ -194,6 +194,10 @@ class MeSerializer(serializers.ModelSerializer):
 
     campus = CampusMiniSerializer(read_only=True)
 
+    # The church the person belongs to (through their campus), so the UI can show
+    # its name instead of a fixed one. null for accounts without a campus.
+    church = serializers.SerializerMethodField()
+
     # Ministries where the person is leader or co-leader (MinistryLeadership).
     led_ministries = serializers.SerializerMethodField()
 
@@ -241,6 +245,7 @@ class MeSerializer(serializers.ModelSerializer):
             "email",
             "phone",
             "campus",
+            "church",
             "baptized",
             "is_manager",
             "led_ministries",
@@ -273,6 +278,12 @@ class MeSerializer(serializers.ModelSerializer):
     def get_led_cells(self, obj):
         # distinct() for the same reason as get_led_teams.
         return CellMiniSerializer(Cell.objects.filter(leaderships__person=obj).distinct(), many=True).data
+
+    def get_church(self, obj):
+        church = obj.campus.church if obj.campus_id else None
+        if church is None:
+            return None
+        return {"id": str(church.id), "name": church.name, "abbreviation": church.abbreviation}
 
     def get_led_campuses(self, obj):
         return CampusMiniSerializer(led_campuses(obj), many=True).data

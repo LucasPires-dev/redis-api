@@ -205,3 +205,26 @@ def test_resending_the_unchanged_email_is_allowed(api_client, leader, brave_memb
     )
 
     assert response.status_code == 200, response.data
+
+
+# --- /api/auth/me/ ----------------------------------------------------------------------
+
+
+def test_me_reports_the_persons_church(api_client, regular_person, church):
+    # The sidebar shows this name instead of a fixed one.
+    response = auth(api_client, regular_person).get("/api/auth/me/")
+
+    assert response.status_code == 200
+    assert response.data["church"] == {
+        "id": str(church.id),
+        "name": "Igreja Luz às Nações",
+        "abbreviation": "ILAN",
+    }
+
+
+def test_me_church_is_null_without_a_campus(api_client):
+    person = Person.objects.create_user(email="semcampus@ilan.church", name="Sem Campus", password=PASSWORD)
+
+    response = auth(api_client, person).get("/api/auth/me/")
+
+    assert response.data["church"] is None

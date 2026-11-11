@@ -116,8 +116,13 @@ def fake_asaas(monkeypatch):
         return charge
 
     def cancel_charge(payment_id):
+        from apps.courses.models import EnrollmentPayment
+
         if state["cancel_fails"]:
             raise AsaasError(0, "timeout")
+        # Like Asaas: a charge that was already paid can't be deleted.
+        if EnrollmentPayment.objects.filter(asaas_payment_id=payment_id).exists():
+            raise AsaasError(400, "paid charge")
         state["cancelled"].append(payment_id)
 
     def cancel_installment(installment_id):

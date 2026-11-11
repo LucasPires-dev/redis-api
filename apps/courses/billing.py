@@ -198,6 +198,9 @@ def refresh_status(enrollment, save=True):
         enrollment.payment_status = PS.PAID
         enrollment.paid_at = enrollment.paid_at or timezone.now()
         enrollment.has_overdue_installment = False
+        # Nothing is open anymore. Asaas refuses to delete a paid charge, so
+        # keeping its id would make a later cancellation fail before refunding.
+        enrollment.asaas_payment_id = enrollment.asaas_installment_id = enrollment.payment_url = ""
     elif paid > 0:
         enrollment.payment_status = PS.PARTIAL
     else:

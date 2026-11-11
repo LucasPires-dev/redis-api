@@ -433,11 +433,15 @@ def test_student_cannot_cancel_after_paying(api_client, student, pending, fake_a
     assert response.status_code == 400
 
 
-def test_coordinator_refunds_before_the_class_starts(api_client, courses_leader, pending, fake_asaas):
-    webhook(api_client, "PAYMENT_RECEIVED", pending, "pay_1", 20.0)  # partial online
+def test_coordinator_refunds_before_the_class_starts(api_client, courses_leader, student, paid_class, fake_asaas):
+    # 2 installments of R$ 15,00: the first paid online, the rest in person.
+    response = self_enroll(as_user(api_client, student), paid_class, installments=2)
+    pending = Enrollment.objects.get(pk=response.data["id"])
+    webhook(api_client, "PAYMENT_RECEIVED", pending, "pay_1a", 15.0, installment="ins_1")
     as_user(api_client, courses_leader).post(
-        f"/api/course-enrollments/{pending.id}/manual-payment/", {"amount_cents": 1000}, format="json"
+        f"/api/course-enrollments/{pending.id}/manual-payment/", {"amount_cents": 1500}, format="json"
     )
+    assert fake_asaas["cancelled_installments"] == ["ins_1"]
     response = api_client.post(
         f"/api/course-enrollments/{pending.id}/cancel/", {"note": "Devolvido em dinheiro"}, format="json"
     )
@@ -445,8 +449,23 @@ def test_coordinator_refunds_before_the_class_starts(api_client, courses_leader,
     assert response.data["payment_status"] == PS.REFUNDED
     assert response.data["refunded_cents"] == 3000
     assert response.data["status"] == EnrollmentStatus.DROPPED
-    assert fake_asaas["refunded"] == ["pay_1"]
+    assert fake_asaas["refunded"] == ["pay_1a"]
     assert all(p["refunded_at"] for p in response.data["payments"])
+
+
+def test_paid_single_charge_is_refunded_not_deleted(api_client, courses_leader, pending, fake_asaas):
+    # Asaas refuses to delete a paid charge: cancelling must go straight to the refund.
+    webhook(api_client, "PAYMENT_RECEIVED", pending, "pay_1", 30.0)
+    pending.refresh_from_db()
+    assert pending.asaas_payment_id == "" and pending.payment_url == ""
+    response = as_user(api_client, courses_leader).post(
+        f"/api/course-enrollments/{pending.id}/cancel/", {}, format="json"
+    )
+    assert response.status_code == 200, response.data
+    assert response.data["payment_status"] == PS.REFUNDED
+    assert fake_asaas["cancelled"] == [] and fake_asaas["refunded"] == ["pay_1"]
+    # The refund webhook still finds the enrollment through the ledger.
+    assert webhook(api_client, "PAYMENT_REFUNDED", pending, "pay_1", 30.0).status_code == 200
 
 
 def test_refund_after_start_needs_override(api_client, courses_leader, pending, paid_class, fake_asaas):

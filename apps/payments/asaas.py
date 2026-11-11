@@ -127,10 +127,18 @@ def cancel_charge(payment_id: str) -> None:
         _check(client.delete(f"/payments/{payment_id}"))
 
 
+# Charges of an installment plan that can still be deleted (not paid yet).
+OPEN_CHARGE_STATUSES = {"PENDING", "OVERDUE"}
+
+
 def cancel_installment(installment_id: str) -> None:
-    """Deletes an installment plan's pending charges."""
+    """Deletes an installment plan's open charges, keeping the paid ones.
+    (DELETE /installments/{id} refuses a plan that has any paid charge.)"""
     with _session() as client:
-        _check(client.delete(f"/installments/{installment_id}"))
+        data = _check(client.get("/payments", params={"installment": installment_id, "limit": 100}))
+        for charge in data.get("data", []):
+            if charge.get("status") in OPEN_CHARGE_STATUSES and not charge.get("deleted"):
+                _check(client.delete(f"/payments/{charge['id']}"))
 
 
 def refund_payment(payment_id: str) -> None:

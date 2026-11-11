@@ -33,7 +33,9 @@ class EventViewSet(viewsets.ModelViewSet):
     permission_classes = [EventPermission]
 
     def get_queryset(self):
-        qs = Event.objects.select_related("campus").prefetch_related("rundown_items__statuses")
+        qs = Event.objects.select_related("campus", "ticket_config").prefetch_related(
+            "rundown_items__statuses"
+        )
         campus_id = self.request.query_params.get("campus")
         if campus_id:
             qs = qs.filter(campus_id=campus_id)

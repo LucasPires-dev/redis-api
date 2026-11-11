@@ -1,8 +1,11 @@
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from rest_framework import serializers
 
 from apps.churches.choices import PRODUCTION_MINISTRY_KINDS, MinistryKind
 from apps.churches.models import Campus, Ministry
+from apps.payments.models import EventTicketConfig
+from apps.payments.serializers import EventTicketInputSerializer, validate_ticket_rules
 
 from .choices import ItemStatus
 from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
@@ -74,6 +77,11 @@ class EventSerializer(serializers.ModelSerializer):
         queryset=Person.objects.all(), source="producer", write_only=True, required=False, allow_null=True
     )
     rundown_items = RundownItemSerializer(many=True, read_only=True)
+    # Optional on create: opens registrations together with the event, in one
+    # transaction. Later changes go through /payments/ticket-configs/.
+    ticket = EventTicketInputSerializer(write_only=True, required=False, allow_null=True)
+    # Read-only summary for lists and cards (price badge, capacity).
+    ticket_config = serializers.SerializerMethodField()
 
     class Meta:
         model = Event
@@ -91,9 +99,49 @@ class EventSerializer(serializers.ModelSerializer):
             "producer",
             "producer_id",
             "rundown_items",
+            "ticket",
+            "ticket_config",
             "created_at",
         ]
         read_only_fields = ["created_at"]
+
+    def get_ticket_config(self, obj):
+        try:
+            config = obj.ticket_config
+        except EventTicketConfig.DoesNotExist:
+            return None
+        return {
+            "id": str(config.id),
+            "price_cents": config.price_cents,
+            "max_capacity": config.max_capacity,
+            "registration_deadline": config.registration_deadline,
+        }
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        ticket = attrs.get("ticket")
+        if ticket is not None:
+            if self.instance is not None:
+                raise serializers.ValidationError(
+                    {"ticket": "Para alterar o ingresso, use a seção Ingresso do evento."}
+                )
+            try:
+                validate_ticket_rules(ticket, attrs.get("starts_at"))
+            except serializers.ValidationError as exc:
+                raise serializers.ValidationError({"ticket": exc.detail})
+        return attrs
+
+    def create(self, validated_data):
+        ticket = validated_data.pop("ticket", None)
+        with transaction.atomic():
+            event = super().create(validated_data)
+            if ticket is not None:
+                EventTicketConfig.objects.create(event=event, **ticket)
+        return event
+
+    def update(self, instance, validated_data):
+        validated_data.pop("ticket", None)
+        return super().update(instance, validated_data)
 
 
 class EventMiniSerializer(serializers.ModelSerializer):

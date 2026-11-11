@@ -3,9 +3,58 @@ from rest_framework import serializers
 
 from apps.production.models import Event
 
-from .models import EventRegistration, EventTicketConfig
+from .models import ACTIVE_STATUSES, EventRegistration, EventTicketConfig
 
 Person = get_user_model()
+
+# Asaas refuses charges under R$ 5,00, so a paid ticket below that could never
+# be paid. 0 means free (registration only, no charge).
+MIN_PAID_PRICE_CENTS = 500
+
+
+def validate_ticket_rules(attrs, starts_at, *, instance=None):
+    """Business rules shared by the ticket config endpoint and the ticket sent
+    together with a new event. `attrs` may be partial (PATCH): missing values
+    fall back to `instance`."""
+
+    def value(name):
+        if name in attrs:
+            return attrs[name]
+        return getattr(instance, name, None)
+
+    errors = {}
+    price = value("price_cents") or 0
+    if 0 < price < MIN_PAID_PRICE_CENTS:
+        errors["price_cents"] = "O valor mínimo de um ingresso pago é R$ 5,00 (ou 0 para gratuito)."
+
+    capacity = value("max_capacity")
+    if capacity is not None:
+        if capacity < 1:
+            errors["max_capacity"] = "Informe pelo menos 1 vaga, ou deixe em branco para ilimitado."
+        elif instance is not None:
+            taken = EventRegistration.objects.filter(
+                event_id=instance.event_id, payment_status__in=ACTIVE_STATUSES
+            ).count()
+            if capacity < taken:
+                errors["max_capacity"] = f"Já existem {taken} inscrições ativas; o limite não pode ser menor."
+
+    deadline = value("registration_deadline")
+    if deadline and starts_at and deadline > starts_at:
+        errors["registration_deadline"] = "O prazo de inscrição precisa terminar até o início do evento."
+
+    if errors:
+        raise serializers.ValidationError(errors)
+    return attrs
+
+
+class EventTicketInputSerializer(serializers.Serializer):
+    """Ticket sent together with a new event (POST /production-events/ `ticket`),
+    so both are created at once."""
+
+    price_cents = serializers.IntegerField(min_value=0)
+    max_capacity = serializers.IntegerField(required=False, allow_null=True)
+    registration_deadline = serializers.DateTimeField(required=False, allow_null=True)
+    description = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class EventTicketConfigSerializer(serializers.ModelSerializer):
@@ -33,6 +82,12 @@ class EventTicketConfigSerializer(serializers.ModelSerializer):
         if self.instance is not None and event.pk != self.instance.event_id:
             raise serializers.ValidationError("Não é possível mover o ingresso para outro evento.")
         return event
+
+    def validate(self, attrs):
+        event = attrs.get("event") or getattr(self.instance, "event", None)
+        return validate_ticket_rules(
+            attrs, event.starts_at if event else None, instance=self.instance
+        )
 
 
 class RegistrationPersonMiniSerializer(serializers.ModelSerializer):

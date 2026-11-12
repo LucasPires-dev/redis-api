@@ -197,6 +197,18 @@ def scope_managed_cells(qs, person):
     ).distinct()
 
 
+def scope_coordinated_cells(qs, person):
+    """Cells a person coordinates (the "coordinate" capability): every cell for
+    a manager or the general cells leader; otherwise the cells of the campuses
+    they lead or whose cells they're in charge of. Cells they only lead are
+    left out — used for the coordination report."""
+    if can_coordinate_cells(person):
+        return qs
+    return qs.filter(
+        Q(campus__leaderships__person=person) | Q(campus__cells_leaderships__person=person)
+    ).distinct()
+
+
 class CellVisitorPermission(BasePermission):
     """Visitors (names and contacts) are for whoever manages the cell: read
     is scoped by scope_managed_cells; writes check can_manage_cell (on create,

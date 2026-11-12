@@ -13,11 +13,12 @@ from rest_framework.response import Response
 
 from apps.courses.models import CampusCoursesLeadership, CourseGeneralLeadership
 from apps.courses.permissions import can_assign_campus_courses_leader
+from apps.people.capabilities import cells_capabilities
 from apps.production.models import EventProducerAssignment
 from apps.production.permissions import can_assign_campus_event_producer
 from apps.reconciliation.models import ReconciliationLead
 
-from . import cell_health, meeting_calendar
+from . import cell_health, cell_report, meeting_calendar
 from .choices import ActivityKind, MinistryKind, VisitorStatus
 from .filters import CellFilter, CellMeetingFilter
 from .models import (
@@ -58,6 +59,7 @@ from .permissions import (
     scope_activities,
     scope_cell_meetings,
     scope_cells,
+    scope_coordinated_cells,
     scope_managed_cells,
     scope_ministries,
     scope_teams,
@@ -570,6 +572,39 @@ class CellViewSet(viewsets.ModelViewSet):
             ),
         )
         return scope_cells(qs, self.request.user)
+
+    @action(detail=False, methods=["get"])
+    def report(self, request):
+        """Coordination report: weekly attendance, visitors and decisions per
+        cell, per-campus comparison and how much of each campus is in a cell.
+        Same filters as the list (?season=current, ?campus=...), over the cells
+        the person coordinates."""
+        if not cells_capabilities(request.user)["coordinate"]:
+            raise PermissionDenied("Só a coordenação de células vê os relatórios.")
+        base = Cell.objects.select_related("campus", "season").prefetch_related(
+            "leaderships__person",
+            "members",
+            Prefetch("visitors", queryset=CellVisitor.objects.only("id", "cell_id", "status")),
+            Prefetch(
+                "meetings",
+                queryset=CellMeeting.objects.only(
+                    "id", "cell_id", "date", "held", "visitors_count", "decisions_count"
+                ).prefetch_related(
+                    Prefetch("attendees", queryset=Person.objects.only("id")),
+                    Prefetch("visitors", queryset=CellVisitor.objects.only("id")),
+                ),
+            ),
+        )
+        cells = list(self.filter_queryset(scope_coordinated_cells(base, request.user)).order_by("campus__name", "name"))
+        # Coverage looks at every cell of the same season(s), from any campus:
+        # someone of campus A in a cell of campus B is still in a cell.
+        season_ids = {cell.season_id for cell in cells}
+        same_season = Q(season_id__in=[s for s in season_ids if s])
+        if None in season_ids:
+            same_season |= Q(season__isnull=True)
+        season_cells = Cell.objects.filter(same_season)
+        coverage = cell_report.campus_coverage({cell.campus_id for cell in cells}, season_cells)
+        return Response(cell_report.build_report(cells, coverage))
 
     @action(detail=True, methods=["get"])
     def care(self, request, pk=None):

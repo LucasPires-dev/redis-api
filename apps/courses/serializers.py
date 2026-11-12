@@ -5,7 +5,7 @@ from rest_framework import serializers
 from apps.churches.serializers import CampusMiniSerializer
 from apps.people.cpf import CpfField
 
-from . import billing
+from . import billing, completion
 from .choices import SEAT_HOLDING_PAYMENT_STATUSES, EnrollmentStatus, TeacherRole
 from .models import (
     ClassExpense,
@@ -132,6 +132,7 @@ class CourseClassSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source="course.name", read_only=True)
     teachers = TeacherSerializer(many=True, read_only=True)
     enrolled_count = serializers.SerializerMethodField()
+    completed_count = serializers.SerializerMethodField()
     lesson_count = serializers.SerializerMethodField()
     # Replaced as a whole on write: items sent with an id are updated, without
     # one created, and missing ones removed (enrollments keep their copies).
@@ -146,8 +147,8 @@ class CourseClassSerializer(serializers.ModelSerializer):
         fields = [
             "id", "course_id", "course_name", "campus", "campus_id",
             "name", "weekday", "start_time", "start_date", "end_date",
-            "description", "teachers", "enrolled_count", "lesson_count",
-            "self_enrollment", "max_capacity", "enrollment_deadline", "reservation_days",
+            "description", "teachers", "enrolled_count", "completed_count", "lesson_count",
+            "min_attendance_percent", "self_enrollment", "max_capacity", "enrollment_deadline", "reservation_days",
             "max_installments", "refund_before_start", "fee_items", "base_price_cents",
             "seats_left", "can_manage", "can_manage_finances",
             "created_at",
@@ -156,6 +157,9 @@ class CourseClassSerializer(serializers.ModelSerializer):
 
     def get_enrolled_count(self, obj):
         return billing.active_enrollments(obj).count()
+
+    def get_completed_count(self, obj):
+        return billing.active_enrollments(obj).filter(status=EnrollmentStatus.COMPLETED).count()
 
     def get_lesson_count(self, obj):
         return obj.lessons.count()
@@ -297,13 +301,33 @@ class EnrollmentSerializer(serializers.ModelSerializer):
 
     person = PersonMiniSerializer(read_only=True)
     payment_status_display = serializers.CharField(source="get_payment_status_display", read_only=True)
+    # {present, counted, percent} — when the view passes the class's attendance
+    # in the context ("attendance"); otherwise null.
+    attendance = serializers.SerializerMethodField()
+    meets_attendance = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
         fields = [
             "id", "person", "status", "enrolled_at", "completed_at",
             "payment_status", "payment_status_display", "material_delivered_at",
+            "attendance", "meets_attendance",
         ]
+
+    def _attendance(self, obj):
+        by_person = self.context.get("attendance")
+        if by_person is None:
+            return None
+        return by_person.get(obj.person_id, completion.EMPTY_SUMMARY)
+
+    def get_attendance(self, obj):
+        return self._attendance(obj)
+
+    def get_meets_attendance(self, obj):
+        attendance = self._attendance(obj)
+        if attendance is None:
+            return None
+        return completion.meets_criterion(obj.course_class, attendance)
 
 
 class EnrollmentFinanceSerializer(EnrollmentSerializer):
@@ -333,6 +357,22 @@ class MyEnrollmentSerializer(EnrollmentFinanceSerializer):
     class Meta(EnrollmentFinanceSerializer.Meta):
         fields = EnrollmentFinanceSerializer.Meta.fields + ["course_class", "can_cancel"]
 
+    def _attendance(self, obj):
+        if not hasattr(obj, "_attendance_cache"):
+            history = completion.lesson_history(obj)
+            taken = [lesson["present"] for lesson in history if lesson["present"] is not None]
+            obj._attendance_cache = {
+                **completion.summary(sum(1 for p in taken if p), len(taken)),
+                "lessons": history,
+            }
+        return obj._attendance_cache
+
+    def get_attendance(self, obj):
+        return self._attendance(obj)
+
+    def get_meets_attendance(self, obj):
+        return completion.meets_criterion(obj.course_class, self._attendance(obj))
+
     def get_course_class(self, obj):
         cc = obj.course_class
         return {
@@ -346,6 +386,7 @@ class MyEnrollmentSerializer(EnrollmentFinanceSerializer):
             "start_date": cc.start_date,
             "end_date": cc.end_date,
             "max_installments": cc.max_installments,
+            "min_attendance_percent": cc.min_attendance_percent,
         }
 
     def get_can_cancel(self, obj):
@@ -406,6 +447,12 @@ class MaterialInputSerializer(serializers.Serializer):
     delivered = serializers.BooleanField()
 
 
+class CompleteClassInputSerializer(serializers.Serializer):
+    """The students to mark as completed (the screen pre-selects who meets the criterion)."""
+
+    person_ids = serializers.ListField(child=serializers.UUIDField(), min_length=1)
+
+
 class ClassExpenseSerializer(serializers.ModelSerializer):
     course_class_id = serializers.PrimaryKeyRelatedField(
         source="course_class", queryset=CourseClass.objects.all(), write_only=True
@@ -443,7 +490,7 @@ class LessonSerializer(serializers.ModelSerializer):
         return obj.attendances.filter(present=True).count()
 
     def get_total_enrolled(self, obj):
-        return obj.course_class.enrollments.filter(status=EnrollmentStatus.ACTIVE).count()
+        return billing.active_enrollments(obj.course_class).count()
 
 
 # ── Attendance ──────────────────────────────────────────────────────────────

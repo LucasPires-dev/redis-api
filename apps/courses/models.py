@@ -111,6 +111,10 @@ class CourseClass(models.Model):
     # Paid enrollments cancelled before the class starts get a full refund;
     # after it starts, only if a coordinator overrides it.
     refund_before_start = models.BooleanField(default=True)
+    # Completion: the share of the lessons a student must attend (see completion.py).
+    min_attendance_percent = models.PositiveSmallIntegerField(
+        default=75, validators=[MinValueValidator(0), MaxValueValidator(100)]
+    )
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

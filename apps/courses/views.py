@@ -13,7 +13,7 @@ from rest_framework.response import Response
 
 from apps.people.cpf import apply_cpf
 
-from . import billing
+from . import billing, completion
 from .choices import EnrollmentStatus
 from .models import (
     ClassExpense,
@@ -37,6 +37,7 @@ from .serializers import (
     BulkAttendanceInputSerializer,
     CancelEnrollmentInputSerializer,
     ChargeInputSerializer,
+    CompleteClassInputSerializer,
     ClassExpenseSerializer,
     CourseClassSerializer,
     CourseSerializer,
@@ -172,9 +173,7 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         (e.g. completed) — teachers may do that too."""
         course_class = self.get_object()
         if request.method == "GET":
-            billing.expire_overdue(course_class.enrollments.all())
-            enrollments = course_class.enrollments.select_related("person")
-            return Response(EnrollmentSerializer(enrollments, many=True).data)
+            return self._roster(course_class)
 
         if not can_manage_class(request.user, course_class):
             raise PermissionDenied()
@@ -210,6 +209,25 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             send_charge=data["send_charge"],
         )
         return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
+
+    def _roster(self, course_class):
+        """The class's enrollments with each student's attendance."""
+        billing.expire_overdue(course_class.enrollments.all())
+        enrollments = course_class.enrollments.select_related("person")
+        context = {"attendance": completion.attendance_by_person(course_class)}
+        return Response(EnrollmentSerializer(enrollments, many=True, context=context).data)
+
+    @action(detail=True, methods=["post"])
+    def complete(self, request, pk=None):
+        """Closes the class for the given students: their enrollments become
+        completed. Teachers may do it too (as with any status change)."""
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        ser = CompleteClassInputSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        completion.complete(course_class, ser.validated_data["person_ids"])
+        return self._roster(course_class)
 
     @action(detail=True, methods=["delete"], url_path=r"enrollments/(?P<person_id>[^/.]+)")
     def remove_enrollment(self, request, pk=None, person_id=None):

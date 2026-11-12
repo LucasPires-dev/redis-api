@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from . import cell_health, meeting_calendar
-from .choices import LeadershipRole
+from .choices import CellAudience, CellRole, LeadershipRole, Weekday
 from .models import (
     Activity,
     ActivityCompletion,
@@ -25,7 +25,7 @@ from .models import (
     TeamLeadership,
     TeamPointAward,
 )
-from .permissions import can_coordinate_campus_cells, can_manage_cell
+from .permissions import can_appoint_cell_trainee, can_coordinate_campus_cells, can_manage_cell
 
 Person = get_user_model()
 
@@ -184,7 +184,13 @@ class CellLeadershipSerializer(serializers.ModelSerializer):
 
 class CellLeadershipInputSerializer(serializers.Serializer):
     person_id = serializers.UUIDField()
-    role = serializers.ChoiceField(choices=LeadershipRole.choices)
+    role = serializers.ChoiceField(choices=CellRole.choices)
+
+
+class CellMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cell
+        fields = ["id", "name"]
 
 
 class CellMemberSerializer(serializers.Serializer):
@@ -258,6 +264,14 @@ class CellSerializer(serializers.ModelSerializer):
     can_coordinate = serializers.SerializerMethodField()
     leaders = serializers.SerializerMethodField()
     co_leaders = serializers.SerializerMethodField()
+    # Líderes em treinamento.
+    trainees = serializers.SerializerMethodField()
+    # Multiplication: the mother cell, when this one was born, and the plan.
+    parent_cell = CellMiniSerializer(read_only=True)
+    multiplication_leader = PersonMiniSerializer(read_only=True)
+    # Whether the requesting user may appoint the cell's leaders in training:
+    # its leader (each level appoints the one below) or coordination.
+    can_appoint_trainee = serializers.SerializerMethodField()
     member_count = serializers.IntegerField(source="members.count", read_only=True)
     # Everyone in the cell: leaders, co-leaders and members, each counted once
     # (a leader isn't always in `members`). What the screens show as "membros".
@@ -296,8 +310,13 @@ class CellSerializer(serializers.ModelSerializer):
             "effective_start",
             "effective_end",
             "previous_cell",
+            "parent_cell",
+            "multiplied_on",
+            "multiplication_date",
+            "multiplication_leader",
             "leaders",
             "co_leaders",
+            "trainees",
             "member_count",
             "participant_count",
             "pending_meetings",
@@ -305,9 +324,10 @@ class CellSerializer(serializers.ModelSerializer):
             "missing_fields",
             "can_manage",
             "can_coordinate",
+            "can_appoint_trainee",
         ]
-        # Set only by the "renew" action.
-        read_only_fields = ["previous_cell"]
+        # Set only by the "renew", "multiply" and "multiplication-plan" actions.
+        read_only_fields = ["previous_cell", "multiplied_on", "multiplication_date"]
 
     def get_participant_count(self, obj):
         # Iterates the prefetched relations (CellViewSet) instead of querying.
@@ -320,6 +340,13 @@ class CellSerializer(serializers.ModelSerializer):
 
     def get_co_leaders(self, obj):
         return PersonMiniSerializer(obj.co_leaders(), many=True).data
+
+    def get_trainees(self, obj):
+        return PersonMiniSerializer(obj.trainees(), many=True).data
+
+    def get_can_appoint_trainee(self, obj):
+        request = self.context.get("request")
+        return bool(request) and can_appoint_cell_trainee(request.user, obj)
 
     def get_can_manage(self, obj):
         request = self.context.get("request")
@@ -374,6 +401,33 @@ class CellSerializer(serializers.ModelSerializer):
                                 f"({season.start_date:%d/%m/%Y} a {season.end_date:%d/%m/%Y})."}
                     )
         return attrs
+
+
+class CellMultiplicationPlanInputSerializer(serializers.Serializer):
+    """PUT /cells/{id}/multiplication-plan/: when the cell should multiply and
+    who should lead the new cell (someone of the cell). Both may be null."""
+
+    date = serializers.DateField(allow_null=True)
+    leader_id = serializers.UUIDField(allow_null=True)
+
+
+class CellMultiplyInputSerializer(serializers.Serializer):
+    """POST /cells/{id}/multiply/: the new cell's name and leader, the people
+    who move to it, and its schedule (the mother's when left out)."""
+
+    name = serializers.CharField(max_length=150)
+    leader_id = serializers.UUIDField()
+    member_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
+    meeting_day = serializers.ChoiceField(choices=Weekday.choices, required=False)
+    meeting_time = serializers.TimeField(input_formats=["%H:%M", "%H:%M:%S"], required=False)
+    target_audience = serializers.ChoiceField(choices=CellAudience.choices, required=False)
+    address = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Informe o nome da nova célula.")
+        return value
 
 
 class CellRenewInputSerializer(serializers.Serializer):

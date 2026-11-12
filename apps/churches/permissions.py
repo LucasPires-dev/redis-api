@@ -1,6 +1,7 @@
 from django.db.models import Q
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
+from .choices import CellRole
 from .models import (
     Campus,
     CampusCellsLeadership,
@@ -165,6 +166,16 @@ def can_manage_cell(person, cell) -> bool:
     if not person.is_authenticated:
         return False
     if cell.leaderships.filter(person=person).exists():
+        return True
+    return can_coordinate_campus_cells(person, cell.campus)
+
+
+def can_appoint_cell_trainee(person, cell) -> bool:
+    """Who names the cell's leaders in training: its leader (each level
+    appoints the one below) or whoever coordinates the campus's cells."""
+    if not person.is_authenticated:
+        return False
+    if any(lead.person_id == person.pk and lead.role == CellRole.LEADER for lead in cell.leaderships.all()):
         return True
     return can_coordinate_campus_cells(person, cell.campus)
 

@@ -12,7 +12,7 @@ from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from . import cell_health, meeting_calendar
-from .choices import LeadershipRole, VisitorStatus
+from .choices import CellRole, VisitorStatus
 
 
 def week_start(day):
@@ -81,7 +81,14 @@ def cell_row(cell, weeks, today=None):
         "id": str(cell.pk),
         "name": cell.name,
         "campus": {"id": str(cell.campus_id), "name": cell.campus.name},
-        "leaders": [lead.person.name for lead in cell.leaderships.all() if lead.role == LeadershipRole.LEADER],
+        "leaders": [lead.person.name for lead in cell.leaderships.all() if lead.role == CellRole.LEADER],
+        "trainees": [lead.person.name for lead in cell.leaderships.all() if lead.role == CellRole.TRAINEE],
+        # The mother cell, for the generations tree.
+        "parent": {"id": str(cell.parent_cell_id), "name": cell.parent_cell.name} if cell.parent_cell_id else None,
+        "multiplied_on": cell.multiplied_on,
+        # Cells born from this one (prefetched daughter_cells with a date).
+        "multiplications": sum(1 for d in cell.daughter_cells.all() if d.multiplied_on),
+        "multiplication_date": cell.multiplication_date,
         "participants": len(participants),
         "meetings_held": len(held),
         "meetings_not_held": sum(1 for m in meetings if not m.held and m.date <= today),
@@ -166,8 +173,18 @@ def build_report(cells, coverage, today=None):
 
     totals = {
         key: sum(row[key] for row in rows)
-        for key in ("meetings_held", "meetings_pending", "attendance", "visitors", "decisions", "new_members")
+        for key in (
+            "meetings_held",
+            "meetings_pending",
+            "attendance",
+            "visitors",
+            "decisions",
+            "new_members",
+            "multiplications",
+        )
     }
+    totals["trainees"] = sum(len(row["trainees"]) for row in rows)
+    totals["planned_multiplications"] = sum(1 for row in rows if row["multiplication_date"])
     totals["cells"] = len(rows)
     totals["participants"] = sum(c["participants"] for c in campus_rows)
     totals["avg_attendance"] = _ratio(totals["attendance"], totals["meetings_held"])

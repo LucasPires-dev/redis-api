@@ -47,6 +47,16 @@ class LeadershipRole(models.TextChoices):
     CO_LEADER = "co_leader", "Colíder"
 
 
+class CellRole(models.TextChoices):
+    """Roles in a célula. Like LeadershipRole plus the leader in training
+    ("Timóteo"), who is being prepared to lead the cell born from a
+    multiplication. Kept apart so the extra role doesn't reach ministries."""
+
+    LEADER = "leader", "Líder"
+    CO_LEADER = "co_leader", "Colíder"
+    TRAINEE = "trainee", "Líder em treinamento"
+
+
 class ActivityKind(models.TextChoices):
     DAILY = "daily", "Diária"
     EVENTUAL = "eventual", "Eventual"

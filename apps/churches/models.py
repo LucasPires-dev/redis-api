@@ -39,7 +39,15 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
-from .choices import ActivityKind, CellAudience, LeadershipRole, MinistryKind, VisitorStatus, Weekday
+from .choices import (
+    ActivityKind,
+    CellAudience,
+    CellRole,
+    LeadershipRole,
+    MinistryKind,
+    VisitorStatus,
+    Weekday,
+)
 
 # =============================================================================
 # Structure: church and campus
@@ -405,6 +413,19 @@ class Cell(models.Model):
     previous_cell = models.ForeignKey(
         "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="next_cells"
     )
+    # Multiplication: the cell this one was born from ("célula mãe") and the
+    # day it happened (set by the "multiply" action). A renewed copy keeps the
+    # mother but not the date, so each multiplication counts once.
+    parent_cell = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="daughter_cells"
+    )
+    multiplied_on = models.DateField(null=True, blank=True)
+    # The plan: when the cell should multiply and who should lead the new one
+    # (usually the leader in training). Set by the cell's leadership.
+    multiplication_date = models.DateField(null=True, blank=True)
+    multiplication_leader = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
     name = models.CharField(max_length=150)
     # Optional, for a cell that starts later or ends earlier than its season.
     # When empty, the season's dates apply (see effective_start/effective_end).
@@ -470,6 +491,24 @@ class Cell(models.Model):
     def co_leaders(self):
         return [cl.person for cl in self.leaderships.filter(role=LeadershipRole.CO_LEADER)]
 
+    def participant_ids(self):
+        """Leaders, co-leaders, leaders in training and members, each once."""
+        people = {leadership.person_id for leadership in self.leaderships.all()}
+        people.update(member.pk for member in self.members.all())
+        return people
+
+    def trainees(self):
+        return [cl.person for cl in self.leaderships.all() if cl.role == CellRole.TRAINEE]
+
+    def generation(self):
+        """1 for a cell nobody multiplied into; +1 for each mother up the line."""
+        generation, seen, cell = 1, {self.pk}, self.parent_cell
+        while cell is not None and cell.pk not in seen:
+            generation += 1
+            seen.add(cell.pk)
+            cell = cell.parent_cell
+        return generation
+
 
 class CellLeadership(models.Model):
     """Links a person to a cell as leader or co-leader.
@@ -487,7 +526,7 @@ class CellLeadership(models.Model):
     person = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cell_leaderships"
     )
-    role = models.CharField(max_length=16, choices=LeadershipRole.choices, default=LeadershipRole.LEADER)
+    role = models.CharField(max_length=16, choices=CellRole.choices, default=CellRole.LEADER)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

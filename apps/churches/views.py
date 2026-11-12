@@ -31,6 +31,7 @@ from .models import (
     CellGeneralLeadership,
     CellLeadership,
     CellMeeting,
+    CellSupervisionVisit,
     CellVisitor,
     Church,
     Ministry,
@@ -45,6 +46,7 @@ from .permissions import (
     ActivityPermission,
     CellMeetingPermission,
     CellPermission,
+    CellSupervisionVisitPermission,
     CellVisitorPermission,
     MinistryPermission,
     SeasonPermission,
@@ -52,6 +54,7 @@ from .permissions import (
     can_appoint_ministry_leaders,
     can_assign_campus_cells_leader,
     can_appoint_cell_trainee,
+    can_supervise_cell,
     can_coordinate_campus_cells,
     can_manage_cell,
     can_manage_ministry,
@@ -62,6 +65,7 @@ from .permissions import (
     scope_cells,
     scope_coordinated_cells,
     scope_managed_cells,
+    scope_supervised_cells,
     scope_ministries,
     scope_teams,
     season_church_ids,
@@ -83,6 +87,8 @@ from .serializers import (
     CellMultiplyInputSerializer,
     CellRenewInputSerializer,
     CellSerializer,
+    CellSupervisionVisitSerializer,
+    CellSupervisorInputSerializer,
     CellVisitorSerializer,
     ChurchSerializer,
     GeneralLeaderInputSerializer,
@@ -560,9 +566,10 @@ class CellViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Cell.objects.select_related(
-            "campus", "campus__church", "season", "parent_cell", "multiplication_leader"
+            "campus", "campus__church", "season", "parent_cell", "multiplication_leader", "supervisor"
         ).prefetch_related(
             "leaderships__person",
+            Prefetch("supervision_visits", queryset=CellSupervisionVisit.objects.only("id", "cell_id", "date")),
             "members",
             # What the pending-meetings count and the health need: dates, and
             # who came (ids only).
@@ -586,7 +593,8 @@ class CellViewSet(viewsets.ModelViewSet):
         the person coordinates."""
         if not cells_capabilities(request.user)["coordinate"]:
             raise PermissionDenied("Só a coordenação de células vê os relatórios.")
-        base = Cell.objects.select_related("campus", "season", "parent_cell").prefetch_related(
+        base = Cell.objects.select_related("campus", "season", "parent_cell", "supervisor").prefetch_related(
+            Prefetch("supervision_visits", queryset=CellSupervisionVisit.objects.only("id", "cell_id", "date")),
             "leaderships__person",
             "members",
             Prefetch("daughter_cells", queryset=Cell.objects.only("id", "parent_cell_id", "multiplied_on")),
@@ -742,6 +750,7 @@ class CellViewSet(viewsets.ModelViewSet):
                 parent_cell=cell.parent_cell,
                 multiplication_date=cell.multiplication_date,
                 multiplication_leader=cell.multiplication_leader,
+                supervisor=cell.supervisor,
                 # start/end dates are season-specific, so they aren't copied.
             )
             CellLeadership.objects.bulk_create(
@@ -762,14 +771,15 @@ class CellViewSet(viewsets.ModelViewSet):
             qs = cell.leaderships.select_related("person")
             return Response(CellLeadershipSerializer(qs, many=True).data)
 
-        # Leaders and co-leaders are assigned by coordination, regardless of
-        # can_manage_cell — a célula leader cannot promote/demote themselves or
-        # others. A leader in training is named by the cell's leader too (each
-        # level appoints the one below), but only over someone without a role.
+        # Leaders and co-leaders are assigned from above — the cell's supervisor
+        # or coordination — regardless of can_manage_cell: a célula leader
+        # cannot promote/demote themselves or others. A leader in training is
+        # named by the cell's leader too (each level appoints the one below),
+        # but only over someone without a role.
         serializer = CellLeadershipInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         role = serializer.validated_data["role"]
-        if not can_coordinate_campus_cells(request.user, cell.campus):
+        if not can_supervise_cell(request.user, cell):
             if role != CellRole.TRAINEE or not can_appoint_cell_trainee(request.user, cell):
                 raise PermissionDenied("Você não pode atribuir liderança às células deste campus.")
             current = cell.leaderships.filter(person_id=serializer.validated_data["person_id"]).first()
@@ -794,7 +804,7 @@ class CellViewSet(viewsets.ModelViewSet):
     def remove_leadership(self, request, pk=None, person_id=None):
         cell = self.get_object()
         leadership = CellLeadership.objects.filter(cell=cell, person_id=person_id).first()
-        allowed = can_coordinate_campus_cells(request.user, cell.campus) or (
+        allowed = can_supervise_cell(request.user, cell) or (
             leadership is not None
             and leadership.role == CellRole.TRAINEE
             and can_appoint_cell_trainee(request.user, cell)
@@ -805,6 +815,24 @@ class CellViewSet(viewsets.ModelViewSet):
             return Response(status=status.HTTP_404_NOT_FOUND)
         leadership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["put"])
+    def supervisor(self, request, pk=None):
+        """Who supervises the cell (person_id, or null to clear): someone of the
+        cell's campus, named by whoever coordinates the campus's cells."""
+        cell = self.get_object()
+        if not can_coordinate_campus_cells(request.user, cell.campus):
+            raise PermissionDenied("Só a coordenação de células define o supervisor.")
+        serializer = CellSupervisorInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        person_id = serializer.validated_data["person_id"]
+        if person_id:
+            person = get_object_or_404(Person, pk=person_id)
+            if person.campus_id != cell.campus_id:
+                raise ValidationError({"person_id": "O supervisor precisa ser do mesmo campus da célula."})
+        cell.supervisor_id = person_id
+        cell.save(update_fields=["supervisor", "updated_at"])
+        return Response(CellSerializer(self.get_queryset().get(pk=cell.pk), context={"request": request}).data)
 
     @action(detail=True, methods=["put", "delete"], url_path="multiplication-plan")
     def multiplication_plan(self, request, pk=None):
@@ -978,6 +1006,28 @@ class CellMeetingViewSet(viewsets.ModelViewSet):
         if CellMeeting.objects.filter(cell=meeting.cell, date=new_date).exclude(pk=meeting.pk).exists():
             raise ValidationError({"date": "Já existe um encontro registrado nesta data."})
         serializer.save()
+
+
+class CellSupervisionVisitViewSet(viewsets.ModelViewSet):
+    """Supervision visits. ?cell=<uuid> for one cell. Only the cell's
+    supervisor and coordination see them (the notes are about the leaders)."""
+
+    serializer_class = CellSupervisionVisitSerializer
+    permission_classes = [CellSupervisionVisitPermission]
+
+    def get_queryset(self):
+        qs = CellSupervisionVisit.objects.select_related("cell", "cell__campus", "created_by").filter(
+            cell__in=scope_supervised_cells(Cell.objects.all(), self.request.user)
+        )
+        cell_id = self.request.query_params.get("cell")
+        if cell_id:
+            qs = qs.filter(cell_id=cell_id)
+        return qs
+
+    def perform_create(self, serializer):
+        if not can_supervise_cell(self.request.user, serializer.validated_data["cell"]):
+            raise PermissionDenied("Você não supervisiona esta célula.")
+        serializer.save(created_by=self.request.user)
 
 
 class CellVisitorViewSet(viewsets.ModelViewSet):

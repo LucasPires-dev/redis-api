@@ -163,21 +163,31 @@ def can_assign_campus_cells_leader(person, campus) -> bool:
 
 
 def can_manage_cell(person, cell) -> bool:
+    """The cell's leadership (leader, co-leader, leader in training), its
+    supervisor, or whoever coordinates the campus's cells."""
     if not person.is_authenticated:
         return False
-    if cell.leaderships.filter(person=person).exists():
+    if cell.supervisor_id == person.pk or cell.leaderships.filter(person=person).exists():
         return True
     return can_coordinate_campus_cells(person, cell.campus)
+
+
+def can_supervise_cell(person, cell) -> bool:
+    """Supervision of a cell (visits, naming its leaders): its supervisor or
+    whoever coordinates the campus's cells."""
+    if not person.is_authenticated:
+        return False
+    return cell.supervisor_id == person.pk or can_coordinate_campus_cells(person, cell.campus)
 
 
 def can_appoint_cell_trainee(person, cell) -> bool:
     """Who names the cell's leaders in training: its leader (each level
-    appoints the one below) or whoever coordinates the campus's cells."""
+    appoints the one below), or anyone above (supervisor, coordination)."""
     if not person.is_authenticated:
         return False
     if any(lead.person_id == person.pk and lead.role == CellRole.LEADER for lead in cell.leaderships.all()):
         return True
-    return can_coordinate_campus_cells(person, cell.campus)
+    return can_supervise_cell(person, cell)
 
 
 def scope_cells(qs, person):
@@ -190,6 +200,7 @@ def scope_cells(qs, person):
     return qs.filter(
         Q(leaderships__person=person)
         | Q(members=person)
+        | Q(supervisor=person)
         | Q(campus__leaderships__person=person)
         | Q(campus__cells_leaderships__person=person)
     ).distinct()
@@ -203,6 +214,19 @@ def scope_managed_cells(qs, person):
         return qs
     return qs.filter(
         Q(leaderships__person=person)
+        | Q(supervisor=person)
+        | Q(campus__leaderships__person=person)
+        | Q(campus__cells_leaderships__person=person)
+    ).distinct()
+
+
+def scope_supervised_cells(qs, person):
+    """Cells whose supervision the person sees (visits and their notes): the
+    ones they supervise and every cell they coordinate."""
+    if can_coordinate_cells(person):
+        return qs
+    return qs.filter(
+        Q(supervisor=person)
         | Q(campus__leaderships__person=person)
         | Q(campus__cells_leaderships__person=person)
     ).distinct()
@@ -230,6 +254,20 @@ class CellVisitorPermission(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         return can_manage_cell(request.user, obj.cell)
+
+
+class CellSupervisionVisitPermission(BasePermission):
+    """Supervision visits: read scoped by scope_supervised_cells; create checks
+    can_supervise_cell in the view (the cell comes in the payload); editing
+    or deleting is for the author or the campus's cells coordination."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return obj.created_by_id == request.user.pk or can_coordinate_campus_cells(request.user, obj.cell.campus)
 
 
 class CellPermission(BasePermission):

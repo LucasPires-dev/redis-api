@@ -15,6 +15,7 @@ from .models import (
     Cell,
     CellLeadership,
     CellMeeting,
+    CellSupervisionVisit,
     CellVisitor,
     Church,
     Ministry,
@@ -25,7 +26,12 @@ from .models import (
     TeamLeadership,
     TeamPointAward,
 )
-from .permissions import can_appoint_cell_trainee, can_coordinate_campus_cells, can_manage_cell
+from .permissions import (
+    can_appoint_cell_trainee,
+    can_coordinate_campus_cells,
+    can_manage_cell,
+    can_supervise_cell,
+)
 
 Person = get_user_model()
 
@@ -270,8 +276,14 @@ class CellSerializer(serializers.ModelSerializer):
     parent_cell = CellMiniSerializer(read_only=True)
     multiplication_leader = PersonMiniSerializer(read_only=True)
     # Whether the requesting user may appoint the cell's leaders in training:
-    # its leader (each level appoints the one below) or coordination.
+    # its leader (each level appoints the one below) or anyone above.
     can_appoint_trainee = serializers.SerializerMethodField()
+    # Supervisão: who supervises the cell, whether the requesting user does
+    # supervision here (supervisor or coordination: visits, naming leaders),
+    # and the date of the last supervision visit (only for them).
+    supervisor = PersonMiniSerializer(read_only=True)
+    can_supervise = serializers.SerializerMethodField()
+    last_supervision_visit = serializers.SerializerMethodField()
     member_count = serializers.IntegerField(source="members.count", read_only=True)
     # Everyone in the cell: leaders, co-leaders and members, each counted once
     # (a leader isn't always in `members`). What the screens show as "membros".
@@ -325,6 +337,9 @@ class CellSerializer(serializers.ModelSerializer):
             "can_manage",
             "can_coordinate",
             "can_appoint_trainee",
+            "supervisor",
+            "can_supervise",
+            "last_supervision_visit",
         ]
         # Set only by the "renew", "multiply" and "multiplication-plan" actions.
         read_only_fields = ["previous_cell", "multiplied_on", "multiplication_date"]
@@ -343,6 +358,15 @@ class CellSerializer(serializers.ModelSerializer):
 
     def get_trainees(self, obj):
         return PersonMiniSerializer(obj.trainees(), many=True).data
+
+    def get_can_supervise(self, obj):
+        request = self.context.get("request")
+        return bool(request) and can_supervise_cell(request.user, obj)
+
+    def get_last_supervision_visit(self, obj):
+        if not self.get_can_supervise(obj):
+            return None
+        return max((visit.date for visit in obj.supervision_visits.all()), default=None)
 
     def get_can_appoint_trainee(self, obj):
         request = self.context.get("request")
@@ -400,6 +424,33 @@ class CellSerializer(serializers.ModelSerializer):
                         {field: f"A data precisa estar dentro da temporada {season.name} "
                                 f"({season.start_date:%d/%m/%Y} a {season.end_date:%d/%m/%Y})."}
                     )
+        return attrs
+
+
+class CellSupervisorInputSerializer(serializers.Serializer):
+    """PUT /cells/{id}/supervisor/: who supervises the cell (null clears)."""
+
+    person_id = serializers.UUIDField(allow_null=True)
+
+
+class CellSupervisionVisitSerializer(serializers.ModelSerializer):
+    """A supervision visit. The cell comes in on create (cell_id); the author
+    is the requesting user."""
+
+    cell_id = serializers.PrimaryKeyRelatedField(source="cell", queryset=Cell.objects.all(), write_only=True)
+    cell = CellMiniSerializer(read_only=True)
+    kind_display = serializers.CharField(source="get_kind_display", read_only=True)
+    created_by = PersonMiniSerializer(read_only=True)
+
+    class Meta:
+        model = CellSupervisionVisit
+        fields = ["id", "cell", "cell_id", "date", "kind", "kind_display", "notes", "created_by", "created_at"]
+        read_only_fields = ["created_at"]
+
+    def validate(self, attrs):
+        # The cell can't change after the visit is registered.
+        if self.instance and "cell" in attrs and attrs["cell"] != self.instance.cell:
+            raise serializers.ValidationError({"cell_id": "A visita não pode mudar de célula."})
         return attrs
 
 

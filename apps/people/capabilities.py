@@ -25,6 +25,8 @@ def cells_capabilities(person) -> dict:
         "lead": Cell.objects.filter(leaderships__person=person).exists(),
         # Church-wide, campus leader or campus cells leader (can_coordinate_campus_cells).
         "coordinate": coordinate,
+        # Supervises at least one cell (the "Supervisão" tab).
+        "supervise": Cell.objects.filter(supervisor=person).exists(),
     }
 
 

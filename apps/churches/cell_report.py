@@ -89,6 +89,8 @@ def cell_row(cell, weeks, today=None):
         # Cells born from this one (prefetched daughter_cells with a date).
         "multiplications": sum(1 for d in cell.daughter_cells.all() if d.multiplied_on),
         "multiplication_date": cell.multiplication_date,
+        "supervisor": cell.supervisor.name if cell.supervisor_id else None,
+        "last_supervision_visit": max((v.date for v in cell.supervision_visits.all()), default=None),
         "participants": len(participants),
         "meetings_held": len(held),
         "meetings_not_held": sum(1 for m in meetings if not m.held and m.date <= today),

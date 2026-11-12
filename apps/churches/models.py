@@ -45,6 +45,7 @@ from .choices import (
     CellRole,
     LeadershipRole,
     MinistryKind,
+    SupervisionVisitKind,
     VisitorStatus,
     Weekday,
 )
@@ -426,6 +427,16 @@ class Cell(models.Model):
     multiplication_leader = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )
+    # Supervisão: who follows this cell between its leader and the campus's
+    # cells coordination (someone of the cell's campus, named by the
+    # coordination). One supervisor usually has several cells.
+    supervisor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="supervised_cells",
+    )
     name = models.CharField(max_length=150)
     # Optional, for a cell that starts later or ends earlier than its season.
     # When empty, the season's dates apply (see effective_start/effective_end).
@@ -625,6 +636,29 @@ class CellMeeting(models.Model):
 
     def __str__(self):
         return f"{self.cell} em {self.date}"
+
+
+class CellSupervisionVisit(models.Model):
+    """A supervisor's follow-up of a cell: a visit to a meeting or a talk with
+    its leadership, with notes. Seen only by the supervisor and coordination
+    (the notes are feedback about the leaders)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cell = models.ForeignKey(Cell, on_delete=models.CASCADE, related_name="supervision_visits")
+    date = models.DateField()
+    kind = models.CharField(max_length=16, choices=SupervisionVisitKind.choices, default=SupervisionVisitKind.MEETING)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+
+    def __str__(self):
+        return f"Supervisão de {self.cell} em {self.date}"
 
 
 # =============================================================================

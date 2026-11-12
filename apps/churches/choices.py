@@ -57,6 +57,11 @@ class CellRole(models.TextChoices):
     TRAINEE = "trainee", "Líder em treinamento"
 
 
+class SupervisionVisitKind(models.TextChoices):
+    MEETING = "meeting", "Visita ao encontro"
+    LEADERSHIP = "leadership", "Conversa com a liderança"
+
+
 class ActivityKind(models.TextChoices):
     DAILY = "daily", "Diária"
     EVENTUAL = "eventual", "Eventual"

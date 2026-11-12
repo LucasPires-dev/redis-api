@@ -4,6 +4,7 @@ from .views import (
     ActivityViewSet,
     CampusViewSet,
     CellMeetingViewSet,
+    CellSupervisionVisitViewSet,
     CellVisitorViewSet,
     CellViewSet,
     ChurchViewSet,
@@ -22,6 +23,7 @@ router.register("seasons", SeasonViewSet, basename="season")
 router.register("cells", CellViewSet, basename="cell")
 router.register("cell-meetings", CellMeetingViewSet, basename="cell-meeting")
 router.register("cell-visitors", CellVisitorViewSet, basename="cell-visitor")
+router.register("cell-supervision-visits", CellSupervisionVisitViewSet, basename="cell-supervision-visit")
 router.register("teams", TeamViewSet, basename="team")
 router.register("activities", ActivityViewSet, basename="activity")
 

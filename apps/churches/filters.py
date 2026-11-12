@@ -19,6 +19,7 @@ class CellFilter(django_filters.FilterSet):
     season = django_filters.CharFilter(method="filter_season")
     active = django_filters.BooleanFilter(method="filter_active")
     mine = django_filters.BooleanFilter(method="filter_mine")
+    supervised = django_filters.BooleanFilter(method="filter_supervised")
 
     class Meta:
         model = Cell
@@ -49,6 +50,12 @@ class CellFilter(django_filters.FilterSet):
             return queryset
         person = self.request.user
         return queryset.filter(Q(leaderships__person=person) | Q(members=person)).distinct()
+
+    def filter_supervised(self, queryset, name, value):
+        """?supervised=true: the cells the caller supervises (the "Supervisão" tab)."""
+        if not value:
+            return queryset
+        return queryset.filter(supervisor=self.request.user)
 
 
 class CellMeetingFilter(django_filters.FilterSet):

@@ -2,18 +2,19 @@ import csv
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, serializers as drf_serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.people.cpf import apply_cpf
 
-from . import billing, completion
+from . import billing, certificates, completion
 from .choices import EnrollmentStatus
 from .models import (
     ClassExpense,
@@ -193,6 +194,8 @@ class CourseClassViewSet(viewsets.ModelViewSet):
                 existing.status = new_status
                 existing.completed_at = timezone.now() if new_status == EnrollmentStatus.COMPLETED else None
                 existing.save(update_fields=["status", "completed_at", "updated_at"])
+                if new_status == EnrollmentStatus.COMPLETED:
+                    certificates.ensure_code(existing)
             return Response(EnrollmentSerializer(existing).data, status=status.HTTP_200_OK)
 
         # A paid enrollment is a financial act: only the coordinators.
@@ -463,6 +466,24 @@ class EnrollmentViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewse
         )
         return self._respond(enrollment)
 
+    @action(detail=True, methods=["get"])
+    def certificate(self, request, pk=None):
+        """The completion certificate (PDF): the student, and whoever manages the class."""
+        enrollment = self.get_object()
+        if enrollment.person_id != request.user.pk and not can_manage_class(
+            request.user, enrollment.course_class
+        ):
+            raise PermissionDenied()
+        if enrollment.status != EnrollmentStatus.COMPLETED:
+            raise drf_serializers.ValidationError(
+                {"detail": "O certificado fica disponível quando o curso é concluído."}
+            )
+        certificates.ensure_code(enrollment)
+        pdf = certificates.build_pdf(enrollment, origin=request.headers.get("Origin", ""))
+        response = HttpResponse(pdf, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{certificates.filename(enrollment)}"'
+        return response
+
     @action(detail=True, methods=["post"])
     def material(self, request, pk=None):
         """Marks the class material as delivered (or not) — teachers too."""
@@ -479,6 +500,20 @@ class EnrollmentViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewse
             enrollment.material_delivered_by = None
         enrollment.save(update_fields=["material_delivered_at", "material_delivered_by", "updated_at"])
         return Response(EnrollmentSerializer(enrollment).data)
+
+
+class CertificateVerifyView(APIView):
+    """Public: confirms a certificate by its code (no login), showing who
+    completed which course — never contact data."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request, code):
+        enrollment = certificates.find_valid(code)
+        if enrollment is None:
+            raise Http404
+        return Response(certificates.public_data(enrollment))
 
 
 class ClassExpenseViewSet(viewsets.ModelViewSet):

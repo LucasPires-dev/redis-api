@@ -1,6 +1,8 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    CertificateVerifyView,
     ClassExpenseViewSet,
     CourseClassViewSet,
     CourseViewSet,
@@ -15,4 +17,7 @@ router.register("course-enrollments", EnrollmentViewSet, basename="course-enroll
 router.register("class-expenses", ClassExpenseViewSet, basename="class-expense")
 router.register("lessons", LessonViewSet, basename="lesson")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("certificates/<str:code>/", CertificateVerifyView.as_view(), name="certificate-verify"),
+    *router.urls,
+]

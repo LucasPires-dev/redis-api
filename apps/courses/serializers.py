@@ -5,7 +5,7 @@ from rest_framework import serializers
 from apps.churches.serializers import CampusMiniSerializer
 from apps.people.cpf import CpfField
 
-from . import billing, completion
+from . import billing, certificates, completion
 from .choices import SEAT_HOLDING_PAYMENT_STATUSES, EnrollmentStatus, TeacherRole
 from .models import (
     ClassExpense,
@@ -305,14 +305,21 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     # in the context ("attendance"); otherwise null.
     attendance = serializers.SerializerMethodField()
     meets_attendance = serializers.SerializerMethodField()
+    # "ABCD-EFGH-JKLM" while completed; null otherwise.
+    certificate_code = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
         fields = [
             "id", "person", "status", "enrolled_at", "completed_at",
             "payment_status", "payment_status_display", "material_delivered_at",
-            "attendance", "meets_attendance",
+            "attendance", "meets_attendance", "certificate_code",
         ]
+
+    def get_certificate_code(self, obj):
+        if obj.status != EnrollmentStatus.COMPLETED or not obj.certificate_code:
+            return None
+        return certificates.display_code(obj.certificate_code)
 
     def _attendance(self, obj):
         by_person = self.context.get("attendance")

@@ -223,11 +223,19 @@ class Enrollment(models.Model):
     material_delivered_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    # Set when the enrollment is completed; printed on the certificate and
+    # checked on the public verification page (see certificates.py).
+    certificate_code = models.CharField(max_length=16, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["person__name"]
         constraints = [
+            models.UniqueConstraint(
+                fields=["certificate_code"],
+                condition=~models.Q(certificate_code=""),
+                name="unique_enrollment_certificate_code",
+            ),
             # One active enrollment per person and class. Cancelled, expired and
             # refunded ones stay as history, so the person can enroll again.
             models.UniqueConstraint(

@@ -123,6 +123,18 @@ def can_coordinate_cells(person) -> bool:
     return person.is_manager or is_cells_general_leader(person)
 
 
+def season_church_ids(person, *, for_write=False):
+    """Churches whose seasons the person works with; None means every church
+    (the manager). Writing: the churches they're general cells leader of.
+    Reading also includes the church of their own campus."""
+    if person.is_manager:
+        return None
+    ids = set(CellGeneralLeadership.objects.filter(leaders=person).values_list("church_id", flat=True))
+    if not for_write and person.campus_id:
+        ids.add(person.campus.church_id)
+    return ids
+
+
 def led_campuses_cells(person):
     """Campuses whose cells the person is in charge of (CampusCellsLeadership)."""
     if not person.is_authenticated:
@@ -196,8 +208,9 @@ class CellPermission(BasePermission):
 
 
 class SeasonPermission(BasePermission):
-    """Read: anyone authenticated (seasons are church-wide public info).
-    Create/update/delete: manager or general cells leader."""
+    """Read: anyone authenticated, for their own church (queryset scoped).
+    Create/update/delete: manager, or the general cells leader of the
+    season's church (create checks the church in the view)."""
 
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
@@ -205,6 +218,12 @@ class SeasonPermission(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         return can_coordinate_cells(request.user)
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        ids = season_church_ids(request.user, for_write=True)
+        return ids is None or obj.church_id in ids
 
 
 def scope_cell_meetings(qs, person):

@@ -57,6 +57,7 @@ from .permissions import (
     scope_cells,
     scope_ministries,
     scope_teams,
+    season_church_ids,
 )
 from .serializers import (
     ActivityCompletionInputSerializer,
@@ -494,10 +495,28 @@ class SeasonViewSet(viewsets.ModelViewSet):
     general cells leader creates/edits. GET /seasons/current/ returns the season
     running today (404 when between seasons)."""
 
-    queryset = Season.objects.select_related("church")
     serializer_class = SeasonSerializer
     permission_classes = [SeasonPermission]
     filterset_fields = ["church"]
+
+    def get_queryset(self):
+        # Each church has its own calendar: only the person's church(es).
+        qs = Season.objects.select_related("church")
+        ids = season_church_ids(self.request.user)
+        return qs if ids is None else qs.filter(church_id__in=ids)
+
+    def perform_create(self, serializer):
+        ids = season_church_ids(self.request.user, for_write=True)
+        if ids is not None and serializer.validated_data["church"].pk not in ids:
+            raise PermissionDenied("Você não pode criar temporadas para esta igreja.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        church = serializer.validated_data.get("church")
+        ids = season_church_ids(self.request.user, for_write=True)
+        if church is not None and ids is not None and church.pk not in ids:
+            raise PermissionDenied("Você não pode mover a temporada para esta igreja.")
+        serializer.save()
 
     @action(detail=False, methods=["get"])
     def current(self, request):

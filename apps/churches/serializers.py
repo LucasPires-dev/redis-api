@@ -258,6 +258,9 @@ class CellSerializer(serializers.ModelSerializer):
     leaders = serializers.SerializerMethodField()
     co_leaders = serializers.SerializerMethodField()
     member_count = serializers.IntegerField(source="members.count", read_only=True)
+    # Everyone in the cell: leaders, co-leaders and members, each counted once
+    # (a leader isn't always in `members`). What the screens show as "membros".
+    participant_count = serializers.SerializerMethodField()
     # Past scheduled meetings nobody registered (see meeting_calendar.py).
     pending_meetings = serializers.SerializerMethodField()
     # Required fields still empty (cells created before they were required);
@@ -293,6 +296,7 @@ class CellSerializer(serializers.ModelSerializer):
             "leaders",
             "co_leaders",
             "member_count",
+            "participant_count",
             "pending_meetings",
             "missing_fields",
             "can_manage",
@@ -300,6 +304,12 @@ class CellSerializer(serializers.ModelSerializer):
         ]
         # Set only by the "renew" action.
         read_only_fields = ["previous_cell"]
+
+    def get_participant_count(self, obj):
+        # Iterates the prefetched relations (CellViewSet) instead of querying.
+        people = {leadership.person_id for leadership in obj.leaderships.all()}
+        people.update(member.pk for member in obj.members.all())
+        return len(people)
 
     def get_leaders(self, obj):
         return PersonMiniSerializer(obj.leaders(), many=True).data

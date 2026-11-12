@@ -184,6 +184,31 @@ def scope_cells(qs, person):
     ).distinct()
 
 
+def scope_managed_cells(qs, person):
+    """Cells a person manages (same rule as can_manage_cell): the ones they
+    lead/co-lead and every cell of a campus they coordinate. Unlike scope_cells,
+    plain members are left out — used for the visitors' contact data."""
+    if can_coordinate_cells(person):
+        return qs
+    return qs.filter(
+        Q(leaderships__person=person)
+        | Q(campus__leaderships__person=person)
+        | Q(campus__cells_leaderships__person=person)
+    ).distinct()
+
+
+class CellVisitorPermission(BasePermission):
+    """Visitors (names and contacts) are for whoever manages the cell: read
+    is scoped by scope_managed_cells; writes check can_manage_cell (on create,
+    in the view, since the cell comes in the payload)."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        return can_manage_cell(request.user, obj.cell)
+
+
 class CellPermission(BasePermission):
     """Read: anyone who can see the célula (queryset already scoped).
     Create célula / assign leadership / renew: can_coordinate_campus_cells for the

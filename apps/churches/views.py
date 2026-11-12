@@ -1,6 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Count, Max, Min, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -15,9 +15,10 @@ from apps.courses.models import CampusCoursesLeadership, CourseGeneralLeadership
 from apps.courses.permissions import can_assign_campus_courses_leader
 from apps.production.models import EventProducerAssignment
 from apps.production.permissions import can_assign_campus_event_producer
+from apps.reconciliation.models import ReconciliationLead
 
 from . import meeting_calendar
-from .choices import ActivityKind, MinistryKind
+from .choices import ActivityKind, MinistryKind, VisitorStatus
 from .filters import CellFilter, CellMeetingFilter
 from .models import (
     Activity,
@@ -29,6 +30,7 @@ from .models import (
     CellGeneralLeadership,
     CellLeadership,
     CellMeeting,
+    CellVisitor,
     Church,
     Ministry,
     MinistryGeneralLeadership,
@@ -42,6 +44,7 @@ from .permissions import (
     ActivityPermission,
     CellMeetingPermission,
     CellPermission,
+    CellVisitorPermission,
     MinistryPermission,
     SeasonPermission,
     TeamPermission,
@@ -55,6 +58,7 @@ from .permissions import (
     scope_activities,
     scope_cell_meetings,
     scope_cells,
+    scope_managed_cells,
     scope_ministries,
     scope_teams,
     season_church_ids,
@@ -74,8 +78,10 @@ from .serializers import (
     CellMemberSerializer,
     CellRenewInputSerializer,
     CellSerializer,
+    CellVisitorSerializer,
     ChurchSerializer,
     GeneralLeaderInputSerializer,
+    MakeVisitorMemberInputSerializer,
     MinistryGeneralLeadershipSerializer,
     MinistryLeadershipInputSerializer,
     MinistryLeadershipSerializer,
@@ -725,7 +731,7 @@ class CellMeetingViewSet(viewsets.ModelViewSet):
     filterset_class = CellMeetingFilter
 
     def get_queryset(self):
-        qs = CellMeeting.objects.select_related("cell", "created_by").prefetch_related("attendees")
+        qs = CellMeeting.objects.select_related("cell", "created_by").prefetch_related("attendees", "visitors")
         return scope_cell_meetings(qs, self.request.user)
 
     def perform_create(self, serializer):
@@ -742,6 +748,97 @@ class CellMeetingViewSet(viewsets.ModelViewSet):
         if CellMeeting.objects.filter(cell=meeting.cell, date=new_date).exclude(pk=meeting.pk).exists():
             raise ValidationError({"date": "Já existe um encontro registrado nesta data."})
         serializer.save()
+
+
+class CellVisitorViewSet(viewsets.ModelViewSet):
+    """A cell's named guests. ?cell=<uuid> for one cell. Only whoever manages
+    the cell sees them (they carry contact data). Actions:
+    - POST {id}/forward/: hands the visitor to Reconciliação as a pending lead
+      of the cell's campus (its triage queue assigns a reconciliador).
+    - POST {id}/make-member/: the visitor joins the cell — an existing person
+      (person_id) or a new one registered with the visitor's data (email).
+    """
+
+    serializer_class = CellVisitorSerializer
+    permission_classes = [CellVisitorPermission]
+
+    def get_queryset(self):
+        qs = (
+            CellVisitor.objects.select_related("cell", "cell__campus", "person")
+            .filter(cell__in=scope_managed_cells(Cell.objects.all(), self.request.user))
+            .annotate(
+                visit_count=Count("meetings", filter=Q(meetings__held=True)),
+                first_visit=Min("meetings__date", filter=Q(meetings__held=True)),
+                last_visit=Max("meetings__date", filter=Q(meetings__held=True)),
+            )
+        )
+        cell_id = self.request.query_params.get("cell")
+        if cell_id:
+            qs = qs.filter(cell_id=cell_id)
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    def perform_create(self, serializer):
+        if not can_manage_cell(self.request.user, serializer.validated_data["cell"]):
+            raise PermissionDenied("Você não pode cadastrar visitantes nesta célula.")
+        serializer.save(created_by=self.request.user)
+
+    def _fresh(self, visitor):
+        return Response(self.get_serializer(self.get_queryset().get(pk=visitor.pk)).data)
+
+    @action(detail=True, methods=["post"])
+    def forward(self, request, pk=None):
+        visitor = self.get_object()
+        if visitor.reconciliation_lead_id:
+            raise ValidationError("Este visitante já foi encaminhado à Reconciliação.")
+        if visitor.status == VisitorStatus.MEMBER:
+            raise ValidationError("Este visitante já é membro da célula.")
+        cell = visitor.cell
+        with transaction.atomic():
+            visitor.reconciliation_lead = ReconciliationLead.objects.create(
+                name=visitor.name,
+                phone=visitor.phone,
+                email=visitor.email,
+                campus=cell.campus,
+                # Shown in the triage queue: where the lead came from.
+                raw_campus_label=f"{cell.campus.name} · célula {cell.name}",
+                submitted_at=timezone.now(),
+                dedup_key=f"cell-visitor:{visitor.pk}",
+                raw_row={"source": "cell_visitor", "cell_id": str(cell.pk), "cell": cell.name},
+            )
+            visitor.status = VisitorStatus.FORWARDED
+            visitor.save(update_fields=["reconciliation_lead", "status", "updated_at"])
+        return self._fresh(visitor)
+
+    @action(detail=True, methods=["post"], url_path="make-member")
+    def make_member(self, request, pk=None):
+        visitor = self.get_object()
+        if visitor.status == VisitorStatus.MEMBER:
+            raise ValidationError("Este visitante já é membro da célula.")
+        serializer = MakeVisitorMemberInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        person = serializer.validated_data.get("person_id")
+        with transaction.atomic():
+            if person is None:
+                email = serializer.validated_data["email"]
+                if Person.objects.filter(email__iexact=email).exists():
+                    raise ValidationError(
+                        {"email": "Já existe uma pessoa com este e-mail. Escolha-a na busca."}
+                    )
+                person = Person.objects.create_user(
+                    email=email,
+                    name=visitor.name,
+                    phone=visitor.phone,
+                    campus=visitor.cell.campus,
+                    password=None,
+                )
+            visitor.cell.members.add(person)
+            visitor.person = person
+            visitor.status = VisitorStatus.MEMBER
+            visitor.save(update_fields=["person", "status", "updated_at"])
+        return self._fresh(visitor)
 
 
 class TeamViewSet(viewsets.ModelViewSet):

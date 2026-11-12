@@ -10,6 +10,7 @@ Hierarchy:
         │       │   └── ActivityCompletion (a person completed it on a given day)
         │       └── TeamPointAward (points given to the whole team)
         └── Cell (célula/GT, tied directly to the campus and to a Season)
+            ├── CellVisitor (a guest, by name, until they join or are forwarded)
             └── CellMeeting (one meeting, with who attended)
 
 Season: a period (e.g. "2026.2") defined church-wide. Cells run per season:
@@ -38,7 +39,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
-from .choices import ActivityKind, CellAudience, LeadershipRole, MinistryKind, Weekday
+from .choices import ActivityKind, CellAudience, LeadershipRole, MinistryKind, VisitorStatus, Weekday
 
 # =============================================================================
 # Structure: church and campus
@@ -499,12 +500,51 @@ class CellLeadership(models.Model):
         return f"{self.person} — {self.get_role_display()} de {self.cell}"
 
 
+class CellVisitor(models.Model):
+    """A guest of a cell, by name — so the leader knows who came, who came back
+    and who still needs a follow-up. Not a Person (no login): a visitor becomes
+    one when they join the cell (`person`) or when the Reconciliação ministry
+    takes them on from the lead created on forwarding (`reconciliation_lead`).
+    Visits are the meetings they're marked in (CellMeeting.visitors)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cell = models.ForeignKey(Cell, on_delete=models.CASCADE, related_name="visitors")
+    name = models.CharField(max_length=150)
+    phone = models.CharField(max_length=20, blank=True)
+    email = models.EmailField(blank=True)
+    notes = models.TextField(blank=True)
+    status = models.CharField(max_length=16, choices=VisitorStatus.choices, default=VisitorStatus.VISITING)
+    # Set when the visitor joins the cell as a member.
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    # Set when forwarded to Reconciliação (the lead goes into its triage queue).
+    reconciliation_lead = models.OneToOneField(
+        "reconciliation.ReconciliationLead",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="cell_visitor",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} (visitante de {self.cell})"
+
+
 class CellMeeting(models.Model):
     """One meeting of a cell on a given date, with who attended.
 
     `attendees` are people registered in the system (members or leaders of the
-    cell, checked in the serializer); first-time guests who aren't registered
-    are only counted in `visitors_count`.
+    cell, checked in the serializer); `visitors` are the cell's named guests
+    (CellVisitor); `visitors_count` counts guests nobody registered by name.
 
     A record with `held=False` says the meeting didn't happen on that date
     (holiday, cancelled), so the date stops showing as pending in the cell's
@@ -517,12 +557,18 @@ class CellMeeting(models.Model):
     held = models.BooleanField(default=True)
     # Why it didn't happen (required when held=False, empty otherwise).
     cancel_reason = models.CharField(max_length=200, blank=True)
-    # Free notes: topic, prayer requests, anything worth remembering.
+    # What was studied/discussed (the "tema" of the weekly report).
+    topic = models.CharField(max_length=200, blank=True)
+    # Free notes: prayer requests, anything worth remembering.
     notes = models.TextField(blank=True)
+    # People who made a decision for Christ in this meeting.
+    decisions_count = models.PositiveSmallIntegerField(default=0)
     # Reverse access: person.attended_cell_meetings.all()
     attendees = models.ManyToManyField(
         settings.AUTH_USER_MODEL, blank=True, related_name="attended_cell_meetings"
     )
+    visitors = models.ManyToManyField(CellVisitor, blank=True, related_name="meetings")
+    # Guests not registered by name.
     visitors_count = models.PositiveSmallIntegerField(default=0)
     # Who registered the meeting. SET_NULL keeps the record if that person is deleted.
     created_by = models.ForeignKey(

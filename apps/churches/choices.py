@@ -52,6 +52,15 @@ class ActivityKind(models.TextChoices):
     EVENTUAL = "eventual", "Eventual"
 
 
+class VisitorStatus(models.TextChoices):
+    """Where a cell visitor stands: still visiting, joined the cell, or handed
+    over to the Reconciliação ministry for follow-up (consolidação)."""
+
+    VISITING = "visiting", "Visitante"
+    MEMBER = "member", "Virou membro"
+    FORWARDED = "forwarded", "Encaminhado à Reconciliação"
+
+
 class Weekday(models.IntegerChoices):
     """Day of the week, numbered like Python's date.isoweekday() (Monday=1 …
     Sunday=7). Stored as an integer so cells sort by day in calendar order and

@@ -1,15 +1,21 @@
 from django.db.models import Q
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import status, viewsets
+from rest_framework.exceptions import NotFound
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.churches.membership import campus_for_invite
 from apps.churches.permissions import led_campuses, led_ministries
+from apps.churches.serializers import CampusPublicSerializer
+from apps.churches.throttles import CampusInviteThrottle
 from apps.reconciliation.models import Reconciliation
 
 from .models import Person
 from .permissions import PersonPermission
-from .serializers import MeSerializer, PersonSerializer
+from .serializers import MeSerializer, PersonSerializer, RegisterSerializer
 
 
 class PersonViewSet(viewsets.ModelViewSet):
@@ -82,3 +88,38 @@ class MeView(APIView):
     def get(self, request):
         # request.user is already the logged-in Person (Person is the AUTH_USER_MODEL).
         return Response(MeSerializer(request.user).data)
+
+
+class RegisterView(APIView):
+    """POST /api/auth/register/ — anyone creates their own account (as a member,
+    never with a role) and gets the same tokens as /api/auth/login/."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "register"
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        person = serializer.save()
+        refresh = RefreshToken.for_user(person)
+        return Response(
+            {"refresh": str(refresh), "access": str(refresh.access_token)},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class InviteLookupView(APIView):
+    """GET /api/auth/invite/{code}/ — which campus an invite is for, so the sign-up
+    screen opened from the link can show it before the account exists."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [CampusInviteThrottle]
+
+    def get(self, request, code):
+        campus = campus_for_invite(code)
+        if campus is None:
+            raise NotFound("Código de convite inválido.")
+        return Response(CampusPublicSerializer(campus).data)

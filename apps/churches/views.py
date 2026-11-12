@@ -17,7 +17,7 @@ from apps.production.models import EventProducerAssignment
 from apps.production.permissions import can_assign_campus_event_producer
 from apps.reconciliation.models import ReconciliationLead
 
-from . import meeting_calendar
+from . import cell_health, meeting_calendar
 from .choices import ActivityKind, MinistryKind, VisitorStatus
 from .filters import CellFilter, CellMeetingFilter
 from .models import (
@@ -557,10 +557,57 @@ class CellViewSet(viewsets.ModelViewSet):
         qs = Cell.objects.select_related("campus", "campus__church", "season").prefetch_related(
             "leaderships__person",
             "members",
-            # Just what the pending-meetings count needs.
-            Prefetch("meetings", queryset=CellMeeting.objects.only("id", "cell_id", "date", "held")),
+            # What the pending-meetings count and the health need: dates, and
+            # who came (ids only).
+            Prefetch(
+                "meetings",
+                queryset=CellMeeting.objects.only(
+                    "id", "cell_id", "date", "held", "visitors_count"
+                ).prefetch_related(
+                    Prefetch("attendees", queryset=Person.objects.only("id")),
+                    Prefetch("visitors", queryset=CellVisitor.objects.only("id")),
+                ),
+            ),
         )
         return scope_cells(qs, self.request.user)
+
+    @action(detail=True, methods=["get"])
+    def care(self, request, pk=None):
+        """Pessoas para cuidar: participants who missed the last meetings in a
+        row and visitors who didn't come back. For whoever manages the cell."""
+        cell = self.get_object()
+        if not can_manage_cell(request.user, cell):
+            raise PermissionDenied("Só a liderança da célula vê esta lista.")
+        meetings = list(CellMeeting.objects.filter(cell=cell).prefetch_related("attendees", "visitors"))
+        visitors = CellVisitor.objects.filter(cell=cell, status=VisitorStatus.VISITING)
+        absent, not_returning = cell_health.people_to_care(cell, meetings, visitors)
+
+        def person(p):
+            return {"id": str(p.pk), "name": p.name, "email": p.email, "phone": p.phone}
+
+        return Response(
+            {
+                "absent_members": [
+                    {
+                        "person": person(row["person"]),
+                        "absences": row["absences"],
+                        "last_attended": row["last_attended"],
+                    }
+                    for row in absent
+                ],
+                "visitors_not_returning": [
+                    {
+                        "id": str(row["visitor"].pk),
+                        "name": row["visitor"].name,
+                        "phone": row["visitor"].phone,
+                        "last_visit": row["last_visit"],
+                        "visit_count": row["visit_count"],
+                        "missed": row["missed"],
+                    }
+                    for row in not_returning
+                ],
+            }
+        )
 
     @action(detail=True, methods=["get"])
     def calendar(self, request, pk=None):

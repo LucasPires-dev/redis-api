@@ -4,7 +4,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 
-from . import meeting_calendar
+from . import cell_health, meeting_calendar
 from .choices import LeadershipRole
 from .models import (
     Activity,
@@ -262,6 +262,8 @@ class CellSerializer(serializers.ModelSerializer):
     # Everyone in the cell: leaders, co-leaders and members, each counted once
     # (a leader isn't always in `members`). What the screens show as "membros".
     participant_count = serializers.SerializerMethodField()
+    # How the cell is doing (see cell_health.py) — only for whoever manages it.
+    health = serializers.SerializerMethodField()
     # Past scheduled meetings nobody registered (see meeting_calendar.py).
     pending_meetings = serializers.SerializerMethodField()
     # Required fields still empty (cells created before they were required);
@@ -299,6 +301,7 @@ class CellSerializer(serializers.ModelSerializer):
             "member_count",
             "participant_count",
             "pending_meetings",
+            "health",
             "missing_fields",
             "can_manage",
             "can_coordinate",
@@ -321,6 +324,12 @@ class CellSerializer(serializers.ModelSerializer):
     def get_can_manage(self, obj):
         request = self.context.get("request")
         return bool(request) and can_manage_cell(request.user, obj)
+
+    def get_health(self, obj):
+        request = self.context.get("request")
+        if not (request and can_manage_cell(request.user, obj)):
+            return None
+        return cell_health.cell_health(obj, obj.meetings.all())
 
     def get_pending_meetings(self, obj):
         return meeting_calendar.pending_count(obj, obj.meetings.all())

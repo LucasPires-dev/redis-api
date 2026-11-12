@@ -119,6 +119,10 @@ def test_meeting_records_named_visitors_topic_and_decisions(api_client, cell, ce
     assert listed["visit_count"] == 1
     assert listed["first_visit"] == listed["last_visit"] == str(TODAY - timedelta(days=1))
 
+    summary = api_client.get(f"/api/cells/{cell.id}/calendar/").data["summary"]
+    assert summary["total_visitors"] == 3
+    assert summary["total_decisions"] == 1
+
 
 def test_meeting_rejects_visitor_of_another_cell(api_client, campus, season, cell, cell_leader):
     other = make_cell(campus=campus, season=season, name="Outra")

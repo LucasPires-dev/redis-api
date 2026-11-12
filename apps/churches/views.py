@@ -572,7 +572,7 @@ class CellViewSet(viewsets.ModelViewSet):
         meetings = list(
             CellMeeting.objects.filter(cell=cell)
             .select_related("created_by")
-            .prefetch_related("attendees")
+            .prefetch_related("attendees", "visitors")
         )
         entries = meeting_calendar.build_calendar(cell, meetings)
         return Response(

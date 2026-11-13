@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 
 from apps.people.cpf import apply_cpf
 
-from . import billing, certificates, completion
+from . import billing, certificates, completion, course_report
 from .choices import EnrollmentStatus
 from .models import (
     ClassExpense,
@@ -231,6 +231,30 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         completion.complete(course_class, ser.validated_data["person_ids"])
         return self._roster(course_class)
+
+    @action(detail=True, methods=["get"])
+    def care(self, request, pk=None):
+        """Active students who need attention (absences in a row, below the
+        minimum) — for whoever manages the class, teachers included."""
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        return Response(course_report.students_to_care(course_class))
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def report(self, request):
+        """Coordination report: one row per class of the campuses the person
+        coordinates. ?campus=<id> and ?state=upcoming|ongoing|finished filter it."""
+        if not course_report.can_see_reports(request.user):
+            raise PermissionDenied("Só a coordenação de cursos vê os relatórios.")
+        state = request.query_params.get("state") or None
+        if state and state not in ("upcoming", "ongoing", "finished"):
+            raise drf_serializers.ValidationError({"state": "Situação inválida."})
+        return Response(
+            course_report.build_report(
+                request.user, campus_id=request.query_params.get("campus") or None, state=state
+            )
+        )
 
     @action(detail=True, methods=["delete"], url_path=r"enrollments/(?P<person_id>[^/.]+)")
     def remove_enrollment(self, request, pk=None, person_id=None):

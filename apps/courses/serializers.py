@@ -5,7 +5,7 @@ from rest_framework import serializers
 from apps.churches.serializers import CampusMiniSerializer
 from apps.people.cpf import CpfField
 
-from . import billing, certificates, completion
+from . import billing, certificates, completion, tracks
 from .choices import SEAT_HOLDING_PAYMENT_STATUSES, EnrollmentStatus, TeacherRole
 from .models import (
     ClassExpense,
@@ -13,6 +13,8 @@ from .models import (
     Course,
     CourseClass,
     CourseClassTeacher,
+    CourseTrack,
+    CourseTrackStep,
     Enrollment,
     EnrollmentItem,
     EnrollmentPayment,
@@ -23,6 +25,7 @@ from .permissions import (
     can_coordinate_campus_courses,
     can_manage_class,
     can_manage_class_finances,
+    can_coordinate_courses,
     can_manage_course,
     coordinated_course_campuses,
 )
@@ -39,9 +42,20 @@ class PersonMiniSerializer(serializers.ModelSerializer):
 # ── Course ──────────────────────────────────────────────────────────────────
 
 
+class CourseMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Course
+        fields = ["id", "name"]
+
+
 class CourseSerializer(serializers.ModelSerializer):
     campus = CampusMiniSerializer(read_only=True)
     campus_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    # Courses to complete first; replaced as a whole on write.
+    prerequisites = CourseMiniSerializer(many=True, read_only=True)
+    prerequisite_ids = serializers.ListField(
+        child=serializers.UUIDField(), write_only=True, required=False, max_length=20
+    )
     class_count = serializers.SerializerMethodField()
     total_enrolled = serializers.SerializerMethodField()
     # Edit/delete the course (can_manage_course).
@@ -53,10 +67,42 @@ class CourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = [
-            "id", "name", "description", "campus", "campus_id",
+            "id", "name", "description", "campus", "campus_id", "prerequisites", "prerequisite_ids",
             "class_count", "total_enrolled", "can_manage", "can_add_class", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate_prerequisite_ids(self, ids):
+        ids = list(dict.fromkeys(ids))
+        courses = list(Course.objects.filter(pk__in=ids).prefetch_related("prerequisites"))
+        if len(courses) != len(ids):
+            raise serializers.ValidationError("Curso inválido.")
+        user = self._user()
+        church_id = self.instance.church_id if self.instance else getattr(tracks.church_of(user), "id", None)
+        if any(c.church_id != church_id for c in courses):
+            raise serializers.ValidationError("Os pré-requisitos precisam ser cursos da mesma igreja.")
+        if self.instance:
+            if any(c.pk == self.instance.pk for c in courses):
+                raise serializers.ValidationError("Um curso não pode ser pré-requisito dele mesmo.")
+            if tracks.creates_cycle(self.instance, courses):
+                raise serializers.ValidationError(
+                    "Isso criaria um ciclo: um dos cursos escolhidos já exige este."
+                )
+        return courses
+
+    def create(self, validated_data):
+        prerequisites = validated_data.pop("prerequisite_ids", None)
+        course = super().create(validated_data)
+        if prerequisites is not None:
+            course.prerequisites.set(prerequisites)
+        return course
+
+    def update(self, instance, validated_data):
+        prerequisites = validated_data.pop("prerequisite_ids", None)
+        course = super().update(instance, validated_data)
+        if prerequisites is not None:
+            course.prerequisites.set(prerequisites)
+        return course
 
     def get_class_count(self, obj):
         return obj.classes.count()
@@ -255,6 +301,9 @@ class OpenClassSerializer(serializers.ModelSerializer):
     base_price_cents = serializers.IntegerField(read_only=True)
     seats_left = serializers.SerializerMethodField()
     my_enrollment = serializers.SerializerMethodField()
+    prerequisites = serializers.SerializerMethodField()
+    # Prerequisite courses the person hasn't completed: they can't enroll yet.
+    missing_prerequisites = serializers.SerializerMethodField()
 
     class Meta:
         model = CourseClass
@@ -263,7 +312,20 @@ class OpenClassSerializer(serializers.ModelSerializer):
             "weekday", "start_time", "start_date", "end_date", "max_capacity",
             "enrollment_deadline", "reservation_days", "max_installments", "refund_before_start",
             "fee_items", "base_price_cents", "seats_left", "my_enrollment",
+            "prerequisites", "missing_prerequisites",
         ]
+
+    def get_prerequisites(self, obj):
+        return CourseMiniSerializer(obj.course.prerequisites.all().order_by("name"), many=True).data
+
+    def get_missing_prerequisites(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return []
+        if "completed_courses" not in self.context:
+            self.context["completed_courses"] = tracks.completed_course_ids(request.user)
+        missing = tracks.missing_prerequisites(obj.course, request.user, self.context["completed_courses"])
+        return CourseMiniSerializer(missing, many=True).data
 
     def get_seats_left(self, obj):
         return billing.seats_left(obj)
@@ -425,6 +487,8 @@ class EnrollmentInputSerializer(EnrollInputSerializer):
     # Create the online payment link now; otherwise the enrollment waits for a
     # payment in person (or a link generated later).
     send_charge = serializers.BooleanField(default=False)
+    # Enroll even without the course's prerequisites (a coordinator's call).
+    override_prerequisites = serializers.BooleanField(default=False)
 
 
 class ScholarshipInputSerializer(serializers.Serializer):
@@ -475,6 +539,88 @@ class ClassExpenseSerializer(serializers.ModelSerializer):
         if self.instance and "course_class" in attrs and attrs["course_class"] != self.instance.course_class:
             raise serializers.ValidationError({"course_class_id": "Não é possível mover uma despesa de turma."})
         return attrs
+
+
+# ── Tracks ──────────────────────────────────────────────────────────────────
+
+
+class CourseTrackSerializer(serializers.ModelSerializer):
+    """A track with its courses in order. `course_ids` (write) replaces the
+    steps as a whole, in the order given. `my_progress`: where the person
+    reading stands in it."""
+
+    steps = serializers.SerializerMethodField()
+    course_ids = serializers.ListField(
+        child=serializers.UUIDField(), write_only=True, min_length=1, max_length=30
+    )
+    can_manage = serializers.SerializerMethodField()
+    my_progress = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CourseTrack
+        fields = ["id", "name", "description", "steps", "course_ids", "can_manage", "my_progress"]
+        read_only_fields = ["id"]
+
+    def _user(self):
+        request = self.context.get("request")
+        return request.user if request else None
+
+    def get_steps(self, obj):
+        return [
+            {"id": str(s.id), "order": s.order, "course": {"id": str(s.course_id), "name": s.course.name}}
+            for s in obj.steps.select_related("course").order_by("order")
+        ]
+
+    def get_can_manage(self, obj):
+        user = self._user()
+        return bool(user) and can_coordinate_courses(user)
+
+    def get_my_progress(self, obj):
+        user = self._user()
+        return tracks.track_progress(obj, user) if user else None
+
+    def validate_course_ids(self, ids):
+        if len(set(ids)) != len(ids):
+            raise serializers.ValidationError("Um curso aparece mais de uma vez na trilha.")
+        courses = {c.pk: c for c in Course.objects.filter(pk__in=ids)}
+        if len(courses) != len(ids):
+            raise serializers.ValidationError("Curso inválido.")
+        church_id = self.instance.church_id if self.instance else getattr(tracks.church_of(self._user()), "id", None)
+        if any(c.church_id != church_id for c in courses.values()):
+            raise serializers.ValidationError("A trilha só pode ter cursos desta igreja.")
+        return [courses[i] for i in ids]
+
+    def validate_name(self, value):
+        value = value.strip()
+        church_id = self.instance.church_id if self.instance else getattr(tracks.church_of(self._user()), "id", None)
+        clash = CourseTrack.objects.filter(church_id=church_id, name__iexact=value)
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("Já existe uma trilha com esse nome.")
+        return value
+
+    def _set_steps(self, track, courses):
+        track.steps.all().delete()
+        CourseTrackStep.objects.bulk_create(
+            CourseTrackStep(track=track, course=course, order=index)
+            for index, course in enumerate(courses, start=1)
+        )
+
+    @transaction.atomic
+    def create(self, validated_data):
+        courses = validated_data.pop("course_ids")
+        track = super().create(validated_data)
+        self._set_steps(track, courses)
+        return track
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        courses = validated_data.pop("course_ids", None)
+        track = super().update(instance, validated_data)
+        if courses is not None:
+            self._set_steps(track, courses)
+        return track
 
 
 # ── Lesson ──────────────────────────────────────────────────────────────────

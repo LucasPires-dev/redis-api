@@ -14,13 +14,14 @@ from rest_framework.views import APIView
 
 from apps.people.cpf import apply_cpf
 
-from . import billing, certificates, completion, course_report
+from . import billing, certificates, completion, course_report, tracks
 from .choices import EnrollmentStatus
 from .models import (
     ClassExpense,
     Course,
     CourseClass,
     CourseClassTeacher,
+    CourseTrack,
     Enrollment,
     Lesson,
     LessonAttendance,
@@ -29,6 +30,7 @@ from .permissions import (
     CourseClassPermission,
     CoursePermission,
     LessonPermission,
+    can_coordinate_courses,
     can_manage_class,
     can_manage_class_finances,
     scope_classes,
@@ -42,6 +44,7 @@ from .serializers import (
     ClassExpenseSerializer,
     CourseClassSerializer,
     CourseSerializer,
+    CourseTrackSerializer,
     EnrollInputSerializer,
     EnrollmentFinanceSerializer,
     EnrollmentInputSerializer,
@@ -201,6 +204,8 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         # A paid enrollment is a financial act: only the coordinators.
         if course_class.is_paid and not can_manage_class_finances(request.user, course_class):
             raise PermissionDenied("Só a coordenação do curso matricula em turmas pagas.")
+        if not data["override_prerequisites"]:
+            tracks.check_prerequisites(course_class, person)
         apply_cpf(person, data.get("cpf", ""))
         enrollment = _billing(
             billing.enroll,
@@ -357,6 +362,7 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             raise PermissionDenied()
         ser = EnrollInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        tracks.check_prerequisites(course_class, request.user)
         apply_cpf(request.user, ser.validated_data.get("cpf", ""))
         enrollment = _billing(
             billing.enroll,
@@ -524,6 +530,35 @@ class EnrollmentViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewse
             enrollment.material_delivered_by = None
         enrollment.save(update_fields=["material_delivered_at", "material_delivered_by", "updated_at"])
         return Response(EnrollmentSerializer(enrollment).data)
+
+
+class CourseTrackViewSet(viewsets.ModelViewSet):
+    """Growth tracks of the person's church: everyone reads them (with their
+    own progress); the church-wide coordination keeps them."""
+
+    serializer_class = CourseTrackSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        church = tracks.church_of(self.request.user)
+        qs = CourseTrack.objects.prefetch_related("steps__course")
+        return qs.filter(church=church) if church else qs.none()
+
+    def _require_coordination(self):
+        if not can_coordinate_courses(self.request.user):
+            raise PermissionDenied("Só a coordenação geral de cursos mantém as trilhas.")
+
+    def perform_create(self, serializer):
+        self._require_coordination()
+        serializer.save(church=tracks.church_of(self.request.user), created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._require_coordination()
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._require_coordination()
+        instance.delete()
 
 
 class CertificateVerifyView(APIView):

@@ -1,6 +1,8 @@
 from django.contrib import admin
 
 from .models import (
+    CourseTrack,
+    CourseTrackStep,
     CampusCoursesLeadership,
     ClassExpense,
     ClassFeeItem,
@@ -19,6 +21,19 @@ from .models import (
 class CourseClassInline(admin.TabularInline):
     model = CourseClass
     extra = 0
+
+
+class CourseTrackStepInline(admin.TabularInline):
+    model = CourseTrackStep
+    extra = 0
+    autocomplete_fields = ["course"]
+
+
+@admin.register(CourseTrack)
+class CourseTrackAdmin(admin.ModelAdmin):
+    list_display = ["name", "church"]
+    search_fields = ["name"]
+    inlines = [CourseTrackStepInline]
 
 
 @admin.register(Course)

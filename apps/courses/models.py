@@ -51,6 +51,11 @@ class Course(models.Model):
     )
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
+    # Courses to complete before enrolling in this one (see tracks.py).
+    # Reverse access: course.required_by.all()
+    prerequisites = models.ManyToManyField(
+        "self", symmetrical=False, blank=True, related_name="required_by"
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -419,6 +424,52 @@ class LessonAttendance(models.Model):
     def __str__(self):
         status = "present" if self.present else "absent"
         return f"{self.person} — {status} at {self.lesson}"
+
+
+# --- Growth tracks --------------------------------------------------------------------
+
+
+class CourseTrack(models.Model):
+    """A growth track (trilha): the church's courses in the order a person
+    should take them, e.g. Membresia → Fundamentos → Liderança. Kept by the
+    church-wide coordination; every member sees their progress in it."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    church = models.ForeignKey("churches.Church", on_delete=models.CASCADE, related_name="course_tracks")
+    name = models.CharField(max_length=150)
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["church", "name"], name="unique_track_name_per_church"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class CourseTrackStep(models.Model):
+    """One course of a track, at its position (1, 2, 3...)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    track = models.ForeignKey(CourseTrack, on_delete=models.CASCADE, related_name="steps")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="track_steps")
+    order = models.PositiveSmallIntegerField()
+
+    class Meta:
+        ordering = ["order"]
+        constraints = [
+            models.UniqueConstraint(fields=["track", "course"], name="unique_course_per_track"),
+        ]
+
+    def __str__(self):
+        return f"{self.order}. {self.course} ({self.track})"
 
 
 # --- Course responsibilities ----------------------------------------------------------

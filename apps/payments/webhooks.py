@@ -25,6 +25,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 
+from apps.notifications import triggers
 from apps.production.realtime import broadcast_event_update
 
 from .asaas import AsaasError, get_payment_status
@@ -106,6 +107,7 @@ def asaas_webhook(request):
             )
             return Response({"ok": True})
         logger.info("Registration %s confirmed via Asaas", registration.pk)
+        triggers.event_registration_confirmed(registration)
     elif event in ASAAS_REFUNDED_EVENTS:
         registration.payment_status = PaymentStatus.REFUNDED
         registration.save(update_fields=["payment_status", "updated_at"])

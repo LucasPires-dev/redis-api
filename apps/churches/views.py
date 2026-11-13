@@ -13,6 +13,7 @@ from rest_framework.response import Response
 
 from apps.courses.models import CampusCoursesLeadership, CourseGeneralLeadership
 from apps.courses.permissions import can_assign_campus_courses_leader
+from apps.notifications import triggers
 from apps.people.capabilities import cells_capabilities
 from apps.production.models import EventProducerAssignment
 from apps.production.permissions import can_assign_campus_event_producer
@@ -520,7 +521,8 @@ class CampusJoinRequestViewSet(
             raise ValidationError({"campus_id": "Você já está vinculado a um campus."})
         if CampusJoinRequest.objects.filter(person=user, status=JoinRequestStatus.PENDING).exists():
             raise ValidationError({"campus_id": "Você já tem um pedido de vínculo aguardando resposta."})
-        serializer.save(person=user)
+        join_request = serializer.save(person=user)
+        triggers.join_request_created(join_request)
 
     def _pending(self):
         join_request = self.get_object()
@@ -549,13 +551,17 @@ class CampusJoinRequestViewSet(
                 raise ValidationError({"detail": "Esta pessoa já está vinculada a um campus."})
             person.campus = join_request.campus
             person.save(update_fields=["campus"])
-            return self._decide(join_request, JoinRequestStatus.APPROVED)
+            response = self._decide(join_request, JoinRequestStatus.APPROVED)
+        triggers.join_request_decided(join_request, approved=True)
+        return response
 
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         join_request = self._pending()
         self._require_campus_leadership(join_request)
-        return self._decide(join_request, JoinRequestStatus.REJECTED)
+        response = self._decide(join_request, JoinRequestStatus.REJECTED)
+        triggers.join_request_decided(join_request, approved=False)
+        return response
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -957,8 +963,11 @@ class CellViewSet(viewsets.ModelViewSet):
             person = get_object_or_404(Person, pk=person_id)
             if person.campus_id != cell.campus_id:
                 raise ValidationError({"person_id": "O supervisor precisa ser do mesmo campus da célula."})
+        appointed = person_id and person_id != cell.supervisor_id
         cell.supervisor_id = person_id
         cell.save(update_fields=["supervisor", "updated_at"])
+        if appointed:
+            triggers.appointed(person_id, "supervisor(a)", f"da célula {cell.name}", "/app/celulas/supervisao")
         return Response(CellSerializer(self.get_queryset().get(pk=cell.pk), context={"request": request}).data)
 
     @action(detail=True, methods=["put", "delete"], url_path="multiplication-plan")

@@ -14,6 +14,8 @@ from collections import defaultdict
 from django.db import transaction
 from django.utils import timezone
 
+from apps.notifications import triggers
+
 from . import billing, certificates
 from .choices import EnrollmentStatus
 from .models import LessonAttendance
@@ -79,4 +81,5 @@ def complete(course_class, person_ids):
         enrollment.completed_at = now
         enrollment.save(update_fields=["status", "completed_at", "updated_at"])
         certificates.ensure_code(enrollment)
+        triggers.course_completed(enrollment)
     return enrollments

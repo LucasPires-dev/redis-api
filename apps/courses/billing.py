@@ -324,6 +324,9 @@ def record_payment(enrollment, amount_cents, method, *, asaas_payment_id="", not
         return None
     _forget_payments(enrollment)
     refresh_status(enrollment)
+    from apps.notifications import triggers
+
+    triggers.enrollment_payment(payment)
     return payment
 
 

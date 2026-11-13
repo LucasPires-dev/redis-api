@@ -12,6 +12,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.notifications import triggers
 from apps.people.cpf import apply_cpf
 
 from . import billing, certificates, completion, course_report, tracks, waitlist
@@ -202,6 +203,7 @@ class CourseClassViewSet(viewsets.ModelViewSet):
                 existing.save(update_fields=["status", "completed_at", "updated_at"])
                 if new_status == EnrollmentStatus.COMPLETED:
                     certificates.ensure_code(existing)
+                    triggers.course_completed(existing)
             return Response(EnrollmentSerializer(existing).data, status=status.HTTP_200_OK)
 
         # A paid enrollment is a financial act: only the coordinators.

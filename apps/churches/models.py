@@ -43,6 +43,7 @@ from .choices import (
     ActivityKind,
     CellAudience,
     CellRole,
+    JoinRequestStatus,
     LeadershipRole,
     MinistryKind,
     SupervisionVisitKind,
@@ -92,6 +93,9 @@ class Campus(models.Model):
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=20, blank=True)
     address = models.CharField(max_length=255, blank=True)
+    # Shared by the campus leadership (QR code, group link): whoever joins with it
+    # is linked right away, no approval. Null = no active invite. See membership.py.
+    invite_code = models.CharField(max_length=16, unique=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -144,6 +148,41 @@ class CampusLeadership(models.Model):
 
     def __str__(self):
         return f"{self.person} — {self.get_role_display()} de {self.campus}"
+
+
+class CampusJoinRequest(models.Model):
+    """A self-registered person asking to be linked to a campus as a member.
+
+    Approval (by that campus's leadership or the manager) sets Person.campus.
+    It never grants a role: leaderships are still appointed by the level above.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name="join_requests")
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="campus_join_requests"
+    )
+    status = models.CharField(
+        max_length=16, choices=JoinRequestStatus.choices, default=JoinRequestStatus.PENDING
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["person"],
+                condition=Q(status=JoinRequestStatus.PENDING),
+                name="unique_pending_join_request_per_person",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.person} → {self.campus} ({self.get_status_display()})"
 
 
 # =============================================================================

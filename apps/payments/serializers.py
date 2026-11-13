@@ -97,8 +97,19 @@ class RegistrationPersonMiniSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "email"]
 
 
+class RegistrationEventMiniSerializer(serializers.ModelSerializer):
+    """Enough of the event to list a person's own registrations."""
+
+    campus_name = serializers.CharField(source="campus.name", default=None, read_only=True)
+
+    class Meta:
+        model = Event
+        fields = ["id", "title", "event_type", "starts_at", "status", "campus_name"]
+
+
 class EventRegistrationSerializer(serializers.ModelSerializer):
     person = RegistrationPersonMiniSerializer(read_only=True)
+    event = RegistrationEventMiniSerializer(read_only=True)
     event_id = serializers.PrimaryKeyRelatedField(
         queryset=Event.objects.all(), source="event", write_only=True
     )
@@ -110,6 +121,7 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "event_id",
+            "event",
             "cpf",
             "person",
             "payment_status",

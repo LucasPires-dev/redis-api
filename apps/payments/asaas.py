@@ -57,16 +57,23 @@ def _check(response: httpx.Response) -> dict:
     return response.json()
 
 
-def find_or_create_customer(email: str, name: str) -> str:
-    """Returns the Asaas customer id for this email, creating one if needed."""
+def find_or_create_customer(email: str, name: str, cpf: str = "") -> str:
+    """Returns the Asaas customer id for this email, creating one if needed.
+    Asaas only charges customers with a CPF/CNPJ, so it is set (or updated)
+    when given."""
     with _session() as client:
         resp = client.get("/customers", params={"email": email})
         data = _check(resp)
         if data.get("data"):
-            return data["data"][0]["id"]
+            customer = data["data"][0]
+            if cpf and customer.get("cpfCnpj") != cpf:
+                _check(client.post(f"/customers/{customer['id']}", json={"cpfCnpj": cpf}))
+            return customer["id"]
 
-        resp = client.post("/customers", json={"name": name, "email": email})
-        data = _check(resp)
+        payload = {"name": name, "email": email}
+        if cpf:
+            payload["cpfCnpj"] = cpf
+        data = _check(client.post("/customers", json=payload))
         return data["id"]
 
 
@@ -80,23 +87,30 @@ def create_charge(
     amount_cents: int,
     description: str,
     external_reference: str,
+    *,
+    due_days: int = CHARGE_DUE_DAYS,
+    installments: int = 1,
 ) -> dict:
-    """Creates a charge (Pix + boleto). Returns the full Asaas payment object
-    including `id`, `invoiceUrl`, `bankSlipUrl`, and `status`."""
-    due_date = timezone.localdate() + timedelta(days=CHARGE_DUE_DAYS)
+    """Creates a charge (the payer picks Pix, boleto or card). Returns the Asaas
+    payment object, including `id`, `invoiceUrl` and `status`.
+
+    With installments > 1 Asaas creates one charge per installment, splitting
+    `amount_cents` (any rounding goes to the last one), and returns the first;
+    its `installment` field identifies the whole set."""
+    due_date = timezone.localdate() + timedelta(days=due_days)
+    payload = {
+        "customer": customer_id,
+        "billingType": "UNDEFINED",  # lets the payer choose Pix/boleto/card
+        "description": description,
+        "externalReference": external_reference,
+        "dueDate": due_date.isoformat(),  # required by Asaas (YYYY-MM-DD)
+    }
+    if installments > 1:
+        payload.update(installmentCount=installments, totalValue=amount_cents / 100)
+    else:
+        payload["value"] = amount_cents / 100
     with _session() as client:
-        resp = client.post(
-            "/payments",
-            json={
-                "customer": customer_id,
-                "billingType": "UNDEFINED",  # lets the payer choose Pix/boleto/card
-                "value": amount_cents / 100,
-                "description": description,
-                "externalReference": external_reference,
-                "dueDate": due_date.isoformat(),  # required by Asaas (YYYY-MM-DD)
-            },
-        )
-        return _check(resp)
+        return _check(client.post("/payments", json=payload))
 
 
 def get_pix_qr(payment_id: str) -> dict:
@@ -118,3 +132,23 @@ def cancel_charge(payment_id: str) -> None:
     """Deletes a pending charge, so its payment link stops accepting payments."""
     with _session() as client:
         _check(client.delete(f"/payments/{payment_id}"))
+
+
+# Charges of an installment plan that can still be deleted (not paid yet).
+OPEN_CHARGE_STATUSES = {"PENDING", "OVERDUE"}
+
+
+def cancel_installment(installment_id: str) -> None:
+    """Deletes an installment plan's open charges, keeping the paid ones.
+    (DELETE /installments/{id} refuses a plan that has any paid charge.)"""
+    with _session() as client:
+        data = _check(client.get("/payments", params={"installment": installment_id, "limit": 100}))
+        for charge in data.get("data", []):
+            if charge.get("status") in OPEN_CHARGE_STATUSES and not charge.get("deleted"):
+                _check(client.delete(f"/payments/{charge['id']}"))
+
+
+def refund_payment(payment_id: str) -> None:
+    """Refunds a paid charge in full."""
+    with _session() as client:
+        _check(client.post(f"/payments/{payment_id}/refund", json={}))

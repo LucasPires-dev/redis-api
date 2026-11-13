@@ -116,8 +116,8 @@ class CellGeneralLeadershipAdmin(admin.ModelAdmin):
 
 @admin.register(CellMeeting)
 class CellMeetingAdmin(admin.ModelAdmin):
-    list_display = ["cell", "date", "visitors_count", "created_by"]
-    list_filter = ["cell__season", "cell__campus"]
+    list_display = ["cell", "date", "held", "visitors_count", "created_by"]
+    list_filter = ["held", "cell__season", "cell__campus"]
     date_hierarchy = "date"
     filter_horizontal = ["attendees"]
 

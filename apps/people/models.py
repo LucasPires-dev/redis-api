@@ -38,6 +38,11 @@ class Person(AbstractBaseUser, PermissionsMixin):
     # Free text (no format validation), optional.
     phone = models.CharField(max_length=20, blank=True)
 
+    # Digits only, validated (see apps.people.cpf). Asked the first time the
+    # person pays online: Asaas needs it to create a charge. Never returned by
+    # the API (personal data); MeSerializer only says whether it is filled.
+    cpf = models.CharField(max_length=11, blank=True, default="")
+
     # --- Church membership ---------------------------------------------------
 
     # The campus the person attends. Optional: someone can be registered before

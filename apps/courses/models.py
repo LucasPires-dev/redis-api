@@ -20,11 +20,18 @@ timestamps, Leadership-style join tables for teachers.
 import uuid
 
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from apps.churches.choices import LeadershipRole
 
-from .choices import EnrollmentStatus, TeacherRole
+from .choices import (
+    SEAT_HOLDING_PAYMENT_STATUSES,
+    EnrollmentPaymentStatus,
+    EnrollmentStatus,
+    PaymentMethod,
+    TeacherRole,
+)
 
 
 class Course(models.Model):
@@ -87,6 +94,24 @@ class CourseClass(models.Model):
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     description = models.TextField(blank=True)
+
+    # ── Enrollment and fees (see billing.py) ──
+    # Members can find the class and enroll themselves (otherwise only the
+    # coordinators enroll people).
+    self_enrollment = models.BooleanField(default=False)
+    max_capacity = models.PositiveIntegerField(null=True, blank=True)  # null = unlimited
+    enrollment_deadline = models.DateField(null=True, blank=True)  # last day to self-enroll
+    # Days a self-enrollment holds the seat while unpaid; also the charge due date.
+    reservation_days = models.PositiveSmallIntegerField(
+        default=3, validators=[MinValueValidator(1), MaxValueValidator(30)]
+    )
+    max_installments = models.PositiveSmallIntegerField(
+        default=1, validators=[MinValueValidator(1), MaxValueValidator(12)]
+    )
+    # Paid enrollments cancelled before the class starts get a full refund;
+    # after it starts, only if a coordinator overrides it.
+    refund_before_start = models.BooleanField(default=True)
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -95,6 +120,15 @@ class CourseClass(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def base_price_cents(self):
+        """What every enrollment pays at least: the sum of the required items."""
+        return sum(item.price_cents for item in self.fee_items.all() if item.required)
+
+    @property
+    def is_paid(self):
+        return any(item.price_cents for item in self.fee_items.all())
 
     class Meta:
         verbose_name = "course class"
@@ -158,17 +192,158 @@ class Enrollment(models.Model):
     enrolled_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
+    # ── Payment (see billing.py) ──
+    payment_status = models.CharField(
+        max_length=16, choices=EnrollmentPaymentStatus.choices, default=EnrollmentPaymentStatus.FREE
+    )
+    # Frozen at enrollment: later price changes don't touch existing enrollments.
+    gross_cents = models.PositiveIntegerField(default=0)  # sum of the chosen items
+    discount_cents = models.PositiveIntegerField(default=0)  # scholarship
+    amount_cents = models.PositiveIntegerField(default=0)  # gross - discount: what is owed
+    refunded_cents = models.PositiveIntegerField(default=0)
+    scholarship_reason = models.CharField(max_length=200, blank=True)
+    scholarship_granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    installments = models.PositiveSmallIntegerField(default=1)
+    # The current Asaas charge (first installment when paying in installments).
+    asaas_payment_id = models.CharField(max_length=100, blank=True)
+    asaas_installment_id = models.CharField(max_length=100, blank=True)
+    payment_url = models.URLField(blank=True)
+    # Self-enrollments hold the seat until then while nothing was paid.
+    expires_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)  # when fully paid
+    # An installment went overdue (the enrollment keeps its seat).
+    has_overdue_installment = models.BooleanField(default=False)
+    material_delivered_at = models.DateTimeField(null=True, blank=True)
+    material_delivered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
     class Meta:
         ordering = ["person__name"]
         constraints = [
+            # One active enrollment per person and class. Cancelled, expired and
+            # refunded ones stay as history, so the person can enroll again.
             models.UniqueConstraint(
                 fields=["course_class", "person"],
-                name="unique_enrollment_per_class",
+                condition=models.Q(payment_status__in=SEAT_HOLDING_PAYMENT_STATUSES)
+                & ~models.Q(status=EnrollmentStatus.DROPPED),
+                name="unique_active_enrollment_per_class",
             ),
         ]
 
     def __str__(self):
         return f"{self.person} in {self.course_class}"
+
+    @property
+    def paid_cents(self):
+        return sum(p.amount_cents for p in self.payments.all())
+
+    @property
+    def balance_cents(self):
+        """What is still owed (0 once paid, waived or closed)."""
+        if self.payment_status in (EnrollmentPaymentStatus.PENDING, EnrollmentPaymentStatus.PARTIAL):
+            return max(self.amount_cents - self.paid_cents, 0)
+        return 0
+
+
+class ClassFeeItem(models.Model):
+    """Something an enrollment in the class pays for: a required item (handout,
+    materials) or an optional one (t-shirt). `options` lists the choices the
+    person must pick from, e.g. sizes ["P", "M", "G"]."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course_class = models.ForeignKey(CourseClass, on_delete=models.CASCADE, related_name="fee_items")
+    name = models.CharField(max_length=100)
+    price_cents = models.PositiveIntegerField()
+    required = models.BooleanField(default=True)
+    options = models.JSONField(default=list, blank=True)
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["course_class", "name"], name="unique_fee_item_name_per_class"),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.course_class})"
+
+
+class EnrollmentItem(models.Model):
+    """An item chosen in an enrollment, with name and price frozen at that time
+    (the class's item may later change or be removed)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE, related_name="items")
+    fee_item = models.ForeignKey(
+        ClassFeeItem, null=True, blank=True, on_delete=models.SET_NULL, related_name="enrollment_items"
+    )
+    name = models.CharField(max_length=100)
+    price_cents = models.PositiveIntegerField()
+    option = models.CharField(max_length=50, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name}{f' ({self.option})' if self.option else ''} — {self.enrollment}"
+
+
+class EnrollmentPayment(models.Model):
+    """Money received for an enrollment: one row per paid Asaas charge (each
+    installment) or per payment recorded by hand. The ledger behind
+    `paid_cents`; the unique Asaas id makes a repeated webhook harmless."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE, related_name="payments")
+    method = models.CharField(max_length=16, choices=PaymentMethod.choices)
+    amount_cents = models.PositiveIntegerField()
+    asaas_payment_id = models.CharField(max_length=100, blank=True)
+    note = models.CharField(max_length=200, blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    paid_at = models.DateTimeField()
+    # Set when the money went back to the person (Asaas refund or in person).
+    refunded_at = models.DateTimeField(null=True, blank=True)
+    refund_note = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["paid_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["asaas_payment_id"],
+                condition=~models.Q(asaas_payment_id=""),
+                name="unique_enrollment_payment_asaas_id",
+            ),
+        ]
+
+    def __str__(self):
+        return f"R$ {self.amount_cents / 100:.2f} — {self.enrollment}"
+
+
+class ClassExpense(models.Model):
+    """Money spent on a class (handouts, coffee break), for its balance."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course_class = models.ForeignKey(CourseClass, on_delete=models.CASCADE, related_name="expenses")
+    description = models.CharField(max_length=200)
+    amount_cents = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    date = models.DateField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+
+    def __str__(self):
+        return f"{self.description} — R$ {self.amount_cents / 100:.2f}"
 
 
 class Lesson(models.Model):

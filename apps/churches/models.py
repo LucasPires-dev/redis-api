@@ -38,7 +38,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
-from .choices import ActivityKind, LeadershipRole, MinistryKind, Weekday
+from .choices import ActivityKind, CellAudience, LeadershipRole, MinistryKind, Weekday
 
 # =============================================================================
 # Structure: church and campus
@@ -364,15 +364,21 @@ class CampusCellsLeadership(models.Model):
 
 
 class CellQuerySet(models.QuerySet):
+    def complete(self):
+        """Cells with meeting day, time and audience set (see Cell.missing_fields)."""
+        return self.filter(meeting_day__isnull=False, meeting_time__isnull=False).exclude(
+            target_audience=""
+        )
+
     def active(self, on=None):
-        """Cells running on `on` (default: today): their season covers that date
-        and their own start/end dates (when set) do too. Cells without a season
-        (created before seasons existed) count as active."""
+        """Cells running on `on` (default: today): complete (day, time and
+        audience set), their season covers that date and their own start/end
+        dates (when set) do too. Cells without a season (created before seasons
+        existed) count as active."""
         on = on or timezone.localdate()
         return (
-            self.filter(
-                Q(season__isnull=True) | Q(season__start_date__lte=on, season__end_date__gte=on)
-            )
+            self.complete()
+            .filter(Q(season__isnull=True) | Q(season__start_date__lte=on, season__end_date__gte=on))
             .exclude(start_date__gt=on)
             .exclude(end_date__lt=on)
         )
@@ -403,13 +409,13 @@ class Cell(models.Model):
     # When empty, the season's dates apply (see effective_start/effective_end).
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
-    # Meeting day (see choices.Weekday: 1=Monday … 7=Sunday) and start time.
-    # Both optional: a cell may not have a fixed schedule yet.
+    # Meeting day (see choices.Weekday: 1=Monday … 7=Sunday), start time and
+    # audience. The API requires all three (CellSerializer); they're nullable/blank
+    # only for cells created before that rule. A cell missing any of them is
+    # incomplete and never counts as active (CellQuerySet.active).
     meeting_day = models.PositiveSmallIntegerField(choices=Weekday.choices, null=True, blank=True)
     meeting_time = models.TimeField(null=True, blank=True)
-    # Target audience, reusing the ministry types (e.g. Jovens, Casais).
-    # Optional: a cell may have no specific audience.
-    target_audience = models.CharField(max_length=32, choices=MinistryKind.choices, blank=True)
+    target_audience = models.CharField(max_length=32, choices=CellAudience.choices, blank=True)
     address = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
     # Reverse access: person.cells.all()
@@ -434,6 +440,20 @@ class Cell(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.campus.name})"
+
+    # Fields a cell needs before it can run, with the message shown when missing.
+    REQUIRED_FIELDS = {
+        "meeting_day": "Defina o dia do encontro.",
+        "meeting_time": "Defina o horário do encontro.",
+        "target_audience": "Defina o público-alvo.",
+    }
+
+    def missing_fields(self):
+        return [field for field in self.REQUIRED_FIELDS if getattr(self, field) in (None, "")]
+
+    @property
+    def is_complete(self):
+        return not self.missing_fields()
 
     @property
     def effective_start(self):
@@ -485,11 +505,18 @@ class CellMeeting(models.Model):
     `attendees` are people registered in the system (members or leaders of the
     cell, checked in the serializer); first-time guests who aren't registered
     are only counted in `visitors_count`.
+
+    A record with `held=False` says the meeting didn't happen on that date
+    (holiday, cancelled), so the date stops showing as pending in the cell's
+    calendar (see meeting_calendar.py). It has no attendance.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     cell = models.ForeignKey(Cell, on_delete=models.CASCADE, related_name="meetings")
     date = models.DateField()
+    held = models.BooleanField(default=True)
+    # Why it didn't happen (required when held=False, empty otherwise).
+    cancel_reason = models.CharField(max_length=200, blank=True)
     # Free notes: topic, prayer requests, anything worth remembering.
     notes = models.TextField(blank=True)
     # Reverse access: person.attended_cell_meetings.all()

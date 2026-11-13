@@ -1,6 +1,8 @@
 from django.contrib import admin
 
 from .models import (
+    CourseTrack,
+    CourseTrackStep,
     CampusCoursesLeadership,
     ClassExpense,
     ClassFeeItem,
@@ -13,12 +15,27 @@ from .models import (
     EnrollmentPayment,
     Lesson,
     LessonAttendance,
+    LessonMaterial,
+    WaitlistEntry,
 )
 
 
 class CourseClassInline(admin.TabularInline):
     model = CourseClass
     extra = 0
+
+
+class CourseTrackStepInline(admin.TabularInline):
+    model = CourseTrackStep
+    extra = 0
+    autocomplete_fields = ["course"]
+
+
+@admin.register(CourseTrack)
+class CourseTrackAdmin(admin.ModelAdmin):
+    list_display = ["name", "church"]
+    search_fields = ["name"]
+    inlines = [CourseTrackStepInline]
 
 
 @admin.register(Course)
@@ -110,3 +127,16 @@ class CourseGeneralLeadershipAdmin(admin.ModelAdmin):
 
     list_display = ["church"]
     filter_horizontal = ["leaders"]
+
+
+@admin.register(WaitlistEntry)
+class WaitlistEntryAdmin(admin.ModelAdmin):
+    list_display = ["person", "course_class", "created_at", "offer_expires_at"]
+    list_select_related = ["person", "course_class__course"]
+    raw_id_fields = ["person", "course_class"]
+
+
+@admin.register(LessonMaterial)
+class LessonMaterialAdmin(admin.ModelAdmin):
+    list_display = ["title", "lesson", "url", "created_at"]
+    raw_id_fields = ["lesson", "created_by"]

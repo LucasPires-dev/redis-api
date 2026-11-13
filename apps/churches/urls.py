@@ -2,6 +2,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     ActivityViewSet,
+    CampusJoinRequestViewSet,
     CampusViewSet,
     CellMeetingViewSet,
     CellSupervisionVisitViewSet,
@@ -17,6 +18,7 @@ from .views import (
 router = DefaultRouter()
 router.register("churches", ChurchViewSet, basename="church")
 router.register("campuses", CampusViewSet, basename="campus")
+router.register("campus-join-requests", CampusJoinRequestViewSet, basename="campus-join-request")
 router.register("ministries", MinistryViewSet, basename="ministry")
 router.register("ministry-general-leaderships", MinistryGeneralLeadershipViewSet, basename="ministry-general-leadership")
 router.register("seasons", SeasonViewSet, basename="season")

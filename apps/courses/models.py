@@ -51,6 +51,11 @@ class Course(models.Model):
     )
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
+    # Courses to complete before enrolling in this one (see tracks.py).
+    # Reverse access: course.required_by.all()
+    prerequisites = models.ManyToManyField(
+        "self", symmetrical=False, blank=True, related_name="required_by"
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -111,6 +116,10 @@ class CourseClass(models.Model):
     # Paid enrollments cancelled before the class starts get a full refund;
     # after it starts, only if a coordinator overrides it.
     refund_before_start = models.BooleanField(default=True)
+    # Completion: the share of the lessons a student must attend (see completion.py).
+    min_attendance_percent = models.PositiveSmallIntegerField(
+        default=75, validators=[MinValueValidator(0), MaxValueValidator(100)]
+    )
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -219,11 +228,19 @@ class Enrollment(models.Model):
     material_delivered_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    # Set when the enrollment is completed; printed on the certificate and
+    # checked on the public verification page (see certificates.py).
+    certificate_code = models.CharField(max_length=16, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["person__name"]
         constraints = [
+            models.UniqueConstraint(
+                fields=["certificate_code"],
+                condition=~models.Q(certificate_code=""),
+                name="unique_enrollment_certificate_code",
+            ),
             # One active enrollment per person and class. Cancelled, expired and
             # refunded ones stay as history, so the person can enroll again.
             models.UniqueConstraint(
@@ -407,6 +424,99 @@ class LessonAttendance(models.Model):
     def __str__(self):
         status = "present" if self.present else "absent"
         return f"{self.person} — {status} at {self.lesson}"
+
+
+class LessonMaterial(models.Model):
+    """A link handed out with a lesson (slides, handout, video, reading),
+    kept by the class's teachers and coordination; its students see it."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name="materials")
+    title = models.CharField(max_length=150)
+    url = models.URLField(max_length=500)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.title} ({self.lesson})"
+
+
+# --- Waitlist -------------------------------------------------------------------------
+
+
+class WaitlistEntry(models.Model):
+    """Someone waiting for a seat in a full class (see waitlist.py). When a
+    seat opens, the first in line gets it held until `offer_expires_at`."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course_class = models.ForeignKey(CourseClass, on_delete=models.CASCADE, related_name="waitlist")
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="course_waitlist"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Set while a seat is held for the person; null while they wait.
+    offer_expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        verbose_name_plural = "waitlist entries"
+        constraints = [
+            models.UniqueConstraint(fields=["course_class", "person"], name="unique_waitlist_entry_per_class"),
+        ]
+
+    def __str__(self):
+        return f"{self.person} waiting for {self.course_class}"
+
+
+# --- Growth tracks --------------------------------------------------------------------
+
+
+class CourseTrack(models.Model):
+    """A growth track (trilha): the church's courses in the order a person
+    should take them, e.g. Membresia → Fundamentos → Liderança. Kept by the
+    church-wide coordination; every member sees their progress in it."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    church = models.ForeignKey("churches.Church", on_delete=models.CASCADE, related_name="course_tracks")
+    name = models.CharField(max_length=150)
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["church", "name"], name="unique_track_name_per_church"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class CourseTrackStep(models.Model):
+    """One course of a track, at its position (1, 2, 3...)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    track = models.ForeignKey(CourseTrack, on_delete=models.CASCADE, related_name="steps")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="track_steps")
+    order = models.PositiveSmallIntegerField()
+
+    class Meta:
+        ordering = ["order"]
+        constraints = [
+            models.UniqueConstraint(fields=["track", "course"], name="unique_course_per_track"),
+        ]
+
+    def __str__(self):
+        return f"{self.order}. {self.course} ({self.track})"
 
 
 # --- Course responsibilities ----------------------------------------------------------

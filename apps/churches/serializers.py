@@ -11,6 +11,7 @@ from .models import (
     ActivityCompletion,
     Campus,
     CampusCellsLeadership,
+    CampusJoinRequest,
     CampusLeadership,
     Cell,
     CellLeadership,
@@ -71,6 +72,30 @@ class CampusSerializer(serializers.ModelSerializer):
 
     def get_co_leaders(self, obj):
         return PersonMiniSerializer(obj.co_leaders(), many=True).data
+
+
+class CampusPublicSerializer(serializers.ModelSerializer):
+    """What an account not yet linked to a campus may see: enough to pick one."""
+
+    church = ChurchSerializer(read_only=True)
+
+    class Meta:
+        model = Campus
+        fields = ["id", "church", "name", "city"]
+
+
+class CampusJoinRequestSerializer(serializers.ModelSerializer):
+    campus = CampusPublicSerializer(read_only=True)
+    campus_id = serializers.PrimaryKeyRelatedField(
+        source="campus", queryset=Campus.objects.all(), write_only=True
+    )
+    person = PersonMiniSerializer(read_only=True)
+    decided_by = PersonMiniSerializer(read_only=True)
+
+    class Meta:
+        model = CampusJoinRequest
+        fields = ["id", "campus", "campus_id", "person", "status", "created_at", "decided_at", "decided_by"]
+        read_only_fields = ["status", "created_at", "decided_at"]
 
 
 class CampusLeadershipSerializer(serializers.ModelSerializer):

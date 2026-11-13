@@ -140,6 +140,19 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.reconciliation.tasks.sync_reconciliation_leads",
         "schedule": crontab(minute="*/15"),
     },
+    # Notifications (apps/notifications/reminders.py). Each reminder is sent once.
+    "notifications-hourly": {
+        "task": "apps.notifications.tasks.send_hourly_reminders",
+        "schedule": crontab(minute=5),
+    },
+    "notifications-daily": {
+        "task": "apps.notifications.tasks.send_daily_reminders",
+        "schedule": crontab(minute=0, hour=8),
+    },
+    "notifications-weekly": {
+        "task": "apps.notifications.tasks.send_weekly_reminders",
+        "schedule": crontab(minute=30, hour=8, day_of_week="mon"),
+    },
 }
 
 REST_FRAMEWORK = {

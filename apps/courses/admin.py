@@ -15,6 +15,8 @@ from .models import (
     EnrollmentPayment,
     Lesson,
     LessonAttendance,
+    LessonMaterial,
+    WaitlistEntry,
 )
 
 
@@ -125,3 +127,16 @@ class CourseGeneralLeadershipAdmin(admin.ModelAdmin):
 
     list_display = ["church"]
     filter_horizontal = ["leaders"]
+
+
+@admin.register(WaitlistEntry)
+class WaitlistEntryAdmin(admin.ModelAdmin):
+    list_display = ["person", "course_class", "created_at", "offer_expires_at"]
+    list_select_related = ["person", "course_class__course"]
+    raw_id_fields = ["person", "course_class"]
+
+
+@admin.register(LessonMaterial)
+class LessonMaterialAdmin(admin.ModelAdmin):
+    list_display = ["title", "lesson", "url", "created_at"]
+    raw_id_fields = ["lesson", "created_by"]

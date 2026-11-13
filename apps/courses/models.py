@@ -426,6 +426,53 @@ class LessonAttendance(models.Model):
         return f"{self.person} — {status} at {self.lesson}"
 
 
+class LessonMaterial(models.Model):
+    """A link handed out with a lesson (slides, handout, video, reading),
+    kept by the class's teachers and coordination; its students see it."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name="materials")
+    title = models.CharField(max_length=150)
+    url = models.URLField(max_length=500)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.title} ({self.lesson})"
+
+
+# --- Waitlist -------------------------------------------------------------------------
+
+
+class WaitlistEntry(models.Model):
+    """Someone waiting for a seat in a full class (see waitlist.py). When a
+    seat opens, the first in line gets it held until `offer_expires_at`."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course_class = models.ForeignKey(CourseClass, on_delete=models.CASCADE, related_name="waitlist")
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="course_waitlist"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Set while a seat is held for the person; null while they wait.
+    offer_expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        verbose_name_plural = "waitlist entries"
+        constraints = [
+            models.UniqueConstraint(fields=["course_class", "person"], name="unique_waitlist_entry_per_class"),
+        ]
+
+    def __str__(self):
+        return f"{self.person} waiting for {self.course_class}"
+
+
 # --- Growth tracks --------------------------------------------------------------------
 
 

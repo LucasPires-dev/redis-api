@@ -94,14 +94,20 @@ def expire_overdue(queryset=None):
     return expired
 
 
-def seats_left(course_class, exclude=None):
+def seats_left(course_class, exclude=None, for_person=None):
+    """Free seats (None: unlimited). Seats held for someone on the waitlist
+    are taken — but for that person (`for_person`), whose seat it is."""
+    from . import waitlist
+
+    expire_overdue(course_class.enrollments.all())
+    waitlist.refresh(course_class)
     if course_class.max_capacity is None:
         return None
-    expire_overdue(course_class.enrollments.all())
     taken = active_enrollments(course_class)
     if exclude is not None:
         taken = taken.exclude(pk=exclude.pk)
-    return max(course_class.max_capacity - taken.count(), 0)
+    held = waitlist.held_offers(course_class, exclude_person=for_person).count()
+    return max(course_class.max_capacity - taken.count() - held, 0)
 
 
 # ── Pricing ──────────────────────────────────────────────────────────────────
@@ -233,9 +239,9 @@ def enroll(course_class, person, choices, installments=1, *, self_service, send_
         if send_charge:
             require_cpf(person)
 
-    left = seats_left(course_class)
+    left = seats_left(course_class, for_person=person)
     if left is not None and left <= 0:
-        raise serializers.ValidationError({"detail": "Vagas esgotadas."})
+        raise serializers.ValidationError({"detail": "Vagas esgotadas.", "code": "full"})
 
     try:
         with transaction.atomic():
@@ -274,6 +280,9 @@ def enroll(course_class, person, choices, installments=1, *, self_service, send_
             logger.exception("Couldn't create the charge for enrollment %s", enrollment.pk)
             enrollment.delete()  # a seat nobody can pay for would only block the person
             raise ProviderUnavailable("Não foi possível gerar a cobrança agora. Tente novamente em alguns minutos.")
+    from . import waitlist
+
+    waitlist.enrolled(course_class, person)
     return enrollment
 
 

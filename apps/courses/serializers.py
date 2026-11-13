@@ -5,7 +5,7 @@ from rest_framework import serializers
 from apps.churches.serializers import CampusMiniSerializer
 from apps.people.cpf import CpfField
 
-from . import billing, certificates, completion, tracks
+from . import billing, certificates, completion, tracks, waitlist
 from .choices import SEAT_HOLDING_PAYMENT_STATUSES, EnrollmentStatus, TeacherRole
 from .models import (
     ClassExpense,
@@ -20,6 +20,8 @@ from .models import (
     EnrollmentPayment,
     Lesson,
     LessonAttendance,
+    LessonMaterial,
+    WaitlistEntry,
 )
 from .permissions import (
     can_coordinate_campus_courses,
@@ -185,6 +187,7 @@ class CourseClassSerializer(serializers.ModelSerializer):
     fee_items = ClassFeeItemSerializer(many=True, required=False)
     base_price_cents = serializers.IntegerField(read_only=True)
     seats_left = serializers.SerializerMethodField()
+    waitlist_count = serializers.SerializerMethodField()
     can_manage = serializers.SerializerMethodField()
     can_manage_finances = serializers.SerializerMethodField()
 
@@ -196,7 +199,7 @@ class CourseClassSerializer(serializers.ModelSerializer):
             "description", "teachers", "enrolled_count", "completed_count", "lesson_count",
             "min_attendance_percent", "self_enrollment", "max_capacity", "enrollment_deadline", "reservation_days",
             "max_installments", "refund_before_start", "fee_items", "base_price_cents",
-            "seats_left", "can_manage", "can_manage_finances",
+            "seats_left", "waitlist_count", "can_manage", "can_manage_finances",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
@@ -212,6 +215,9 @@ class CourseClassSerializer(serializers.ModelSerializer):
 
     def get_seats_left(self, obj):
         return billing.seats_left(obj)
+
+    def get_waitlist_count(self, obj):
+        return obj.waitlist.count()
 
     def _user(self):
         request = self.context.get("request")
@@ -299,8 +305,11 @@ class OpenClassSerializer(serializers.ModelSerializer):
     campus = CampusMiniSerializer(read_only=True)
     fee_items = ClassFeeItemSerializer(many=True, read_only=True)
     base_price_cents = serializers.IntegerField(read_only=True)
+    # For the person asking: a seat held for them on the waitlist counts as free.
     seats_left = serializers.SerializerMethodField()
     my_enrollment = serializers.SerializerMethodField()
+    # {position, offer_expires_at, joined_at} while the person is on the waitlist.
+    my_waitlist = serializers.SerializerMethodField()
     prerequisites = serializers.SerializerMethodField()
     # Prerequisite courses the person hasn't completed: they can't enroll yet.
     missing_prerequisites = serializers.SerializerMethodField()
@@ -311,7 +320,7 @@ class OpenClassSerializer(serializers.ModelSerializer):
             "id", "course_name", "course_description", "campus", "name", "description",
             "weekday", "start_time", "start_date", "end_date", "max_capacity",
             "enrollment_deadline", "reservation_days", "max_installments", "refund_before_start",
-            "fee_items", "base_price_cents", "seats_left", "my_enrollment",
+            "fee_items", "base_price_cents", "seats_left", "my_enrollment", "my_waitlist",
             "prerequisites", "missing_prerequisites",
         ]
 
@@ -328,7 +337,14 @@ class OpenClassSerializer(serializers.ModelSerializer):
         return CourseMiniSerializer(missing, many=True).data
 
     def get_seats_left(self, obj):
-        return billing.seats_left(obj)
+        request = self.context.get("request")
+        return billing.seats_left(obj, for_person=request.user if request else None)
+
+    def get_my_waitlist(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return None
+        return waitlist.status_of(waitlist.entry_of(obj, request.user))
 
     def get_my_enrollment(self, obj):
         request = self.context.get("request")
@@ -626,16 +642,30 @@ class CourseTrackSerializer(serializers.ModelSerializer):
 # ── Lesson ──────────────────────────────────────────────────────────────────
 
 
+class LessonMaterialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LessonMaterial
+        fields = ["id", "title", "url", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+    def validate_title(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Dê um nome ao material.")
+        return value
+
+
 class LessonSerializer(serializers.ModelSerializer):
     course_class_id = serializers.UUIDField(write_only=True)
     attendance_count = serializers.SerializerMethodField()
     total_enrolled = serializers.SerializerMethodField()
+    materials = LessonMaterialSerializer(many=True, read_only=True)
 
     class Meta:
         model = Lesson
         fields = [
             "id", "course_class_id", "order", "title", "date", "notes",
-            "attendance_count", "total_enrolled", "created_at",
+            "attendance_count", "total_enrolled", "materials", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -644,6 +674,23 @@ class LessonSerializer(serializers.ModelSerializer):
 
     def get_total_enrolled(self, obj):
         return billing.active_enrollments(obj.course_class).count()
+
+
+# ── Waitlist ────────────────────────────────────────────────────────────────
+
+
+class WaitlistEntrySerializer(serializers.ModelSerializer):
+    """The class's line, for its teachers and coordination."""
+
+    person = PersonMiniSerializer(read_only=True)
+    position = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WaitlistEntry
+        fields = ["id", "person", "position", "offer_expires_at", "created_at"]
+
+    def get_position(self, obj):
+        return waitlist.position(obj)
 
 
 # ── Attendance ──────────────────────────────────────────────────────────────

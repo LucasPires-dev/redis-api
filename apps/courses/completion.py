@@ -59,8 +59,9 @@ def lesson_history(enrollment):
     )
     return [
         {"id": str(lesson.id), "order": lesson.order, "title": lesson.title, "date": lesson.date,
-         "present": taken.get(lesson.id)}
-        for lesson in course_class.lessons.all()
+         "present": taken.get(lesson.id),
+         "materials": [{"id": str(m.id), "title": m.title, "url": m.url} for m in lesson.materials.all()]}
+        for lesson in course_class.lessons.prefetch_related("materials")
     ]
 
 

@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 
 from apps.people.cpf import apply_cpf
 
-from . import billing, certificates, completion, course_report, tracks
+from . import billing, certificates, completion, course_report, tracks, waitlist
 from .choices import EnrollmentStatus
 from .models import (
     ClassExpense,
@@ -25,6 +25,7 @@ from .models import (
     Enrollment,
     Lesson,
     LessonAttendance,
+    LessonMaterial,
 )
 from .permissions import (
     CourseClassPermission,
@@ -50,6 +51,7 @@ from .serializers import (
     EnrollmentInputSerializer,
     EnrollmentSerializer,
     LessonAttendanceSerializer,
+    LessonMaterialSerializer,
     LessonSerializer,
     ManualPaymentInputSerializer,
     MaterialInputSerializer,
@@ -59,6 +61,7 @@ from .serializers import (
     ScholarshipInputSerializer,
     TeacherInputSerializer,
     TeacherSerializer,
+    WaitlistEntrySerializer,
 )
 
 Person = get_user_model()
@@ -351,15 +354,20 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             qs = qs.filter(course__church_id=church_id)
         return Response(OpenClassSerializer(qs, many=True, context={"request": request}).data)
 
-    @action(detail=True, methods=["post"], url_path="enroll", permission_classes=[IsAuthenticated])
-    def enroll(self, request, pk=None):
-        """A member enrolls themselves in an open class."""
+    def _open_class(self, request, pk):
+        """An open class of the person's church (for members acting on their own)."""
         course_class = get_object_or_404(
             CourseClass.objects.filter(billing.open_classes_filter()), pk=pk
         )
         church_id = getattr(request.user.campus, "church_id", None)
         if church_id and course_class.course.church_id != church_id:
             raise PermissionDenied()
+        return course_class
+
+    @action(detail=True, methods=["post"], url_path="enroll", permission_classes=[IsAuthenticated])
+    def enroll(self, request, pk=None):
+        """A member enrolls themselves in an open class."""
+        course_class = self._open_class(request, pk)
         ser = EnrollInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         tracks.check_prerequisites(course_class, request.user)
@@ -376,6 +384,39 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             MyEnrollmentSerializer(enrollment, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+    # ── Waitlist ────────────────────────────────────────────────────────
+
+    @action(detail=True, methods=["post", "delete"], url_path="waitlist", permission_classes=[IsAuthenticated])
+    def own_waitlist(self, request, pk=None):
+        """POST: a member joins the line of a full open class. DELETE: leaves it
+        (or gives up the seat held for them)."""
+        if request.method == "DELETE":
+            course_class = get_object_or_404(CourseClass, pk=pk)
+            waitlist.leave(course_class, request.user)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        course_class = self._open_class(request, pk)
+        tracks.check_prerequisites(course_class, request.user)
+        entry = waitlist.join(course_class, request.user)
+        return Response(waitlist.status_of(entry), status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="waitlist-entries")
+    def waitlist_entries(self, request, pk=None):
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        billing.seats_left(course_class)  # hands out / expires offers first
+        entries = course_class.waitlist.select_related("person", "course_class")
+        return Response(WaitlistEntrySerializer(entries, many=True).data)
+
+    @action(detail=True, methods=["delete"], url_path=r"waitlist-entries/(?P<entry_id>[^/.]+)")
+    def remove_waitlist_entry(self, request, pk=None, entry_id=None):
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        get_object_or_404(course_class.waitlist, pk=entry_id).delete()
+        waitlist.refresh(course_class)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     # ── People search (for enrollment/teacher pickers) ──────────────────
 
@@ -611,7 +652,7 @@ class LessonViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Only lessons of classes the person can see (coordinators, teachers).
         visible = scope_classes(CourseClass.objects.all(), self.request.user)
-        qs = Lesson.objects.select_related("course_class").prefetch_related("attendances").filter(
+        qs = Lesson.objects.select_related("course_class").prefetch_related("attendances", "materials").filter(
             course_class__in=visible
         )
         class_id = self.request.query_params.get("course_class_id")
@@ -621,6 +662,27 @@ class LessonViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save()
+
+    # ── Materials ───────────────────────────────────────────────────────
+
+    @action(detail=True, methods=["post"], url_path="materials")
+    def materials(self, request, pk=None):
+        """Adds a link to the lesson (teachers and coordination)."""
+        lesson = self.get_object()
+        if not can_manage_class(request.user, lesson.course_class):
+            raise PermissionDenied()
+        ser = LessonMaterialSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        material = ser.save(lesson=lesson, created_by=request.user)
+        return Response(LessonMaterialSerializer(material).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["delete"], url_path=r"materials/(?P<material_id>[^/.]+)")
+    def remove_material(self, request, pk=None, material_id=None):
+        lesson = self.get_object()
+        if not can_manage_class(request.user, lesson.course_class):
+            raise PermissionDenied()
+        get_object_or_404(LessonMaterial, pk=material_id, lesson=lesson).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     # ── Attendance ──────────────────────────────────────────────────────
 

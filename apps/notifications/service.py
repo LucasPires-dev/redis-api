@@ -67,23 +67,27 @@ def notify(recipients, kind: str, title: str, *, body: str = "", link: str = "",
                 ignore_conflicts=bool(dedupe_key),
             )
         transaction.on_commit(lambda: _push(ids, title))
-        if settings.NOTIFICATION_EMAILS_ENABLED:
-            new_ids = [str(n.pk) for n in created]
-            transaction.on_commit(lambda: _queue_emails(new_ids))
+        new_ids = [str(n.pk) for n in created]
+        if settings.NOTIFICATION_EMAILS_ENABLED or settings.NOTIFICATION_PUSH_ENABLED:
+            transaction.on_commit(lambda: _queue_delivery(new_ids))
         return created
     except Exception:
         logger.exception("Failed to raise notification %s", kind)
         return []
 
 
-def _queue_emails(notification_ids):
-    """Emails go out from the worker, so a slow SMTP never holds the request."""
-    from .tasks import send_notification_emails
+def _queue_delivery(notification_ids):
+    """Email and push go out from the worker, so a slow provider never holds
+    the request."""
+    from .tasks import send_notification_emails, send_notification_push
 
     try:
-        send_notification_emails.delay(notification_ids)
+        if settings.NOTIFICATION_EMAILS_ENABLED:
+            send_notification_emails.delay(notification_ids)
+        if settings.NOTIFICATION_PUSH_ENABLED:
+            send_notification_push.delay(notification_ids)
     except Exception:
-        logger.warning("Couldn't queue notification emails", exc_info=True)
+        logger.warning("Couldn't queue notification delivery", exc_info=True)
 
 
 def _push(person_ids, title):

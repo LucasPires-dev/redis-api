@@ -169,6 +169,12 @@ EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
 EMAIL_TIMEOUT = 15
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="Redis <nao-responda@localhost>")
+# Push notifications (Web Push). Generate the pair once with
+# `manage.py generate_vapid_keys`; without them push stays off.
+VAPID_PUBLIC_KEY = config("VAPID_PUBLIC_KEY", default="")
+VAPID_PRIVATE_KEY = config("VAPID_PRIVATE_KEY", default="")
+VAPID_SUBJECT = config("VAPID_SUBJECT", default="mailto:nao-responda@localhost")
+NOTIFICATION_PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
 NOTIFICATION_EMAILS_ENABLED = config("NOTIFICATION_EMAILS_ENABLED", default=bool(EMAIL_HOST), cast=bool)
 
 REST_FRAMEWORK = {

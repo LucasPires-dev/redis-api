@@ -73,7 +73,7 @@ def test_skips_people_without_email_or_inactive(campus):
 def test_queues_the_email_after_commit(member, django_capture_on_commit_callbacks, monkeypatch):
     queued = []
     monkeypatch.setattr("apps.notifications.service._push", lambda *a: None)
-    monkeypatch.setattr("apps.notifications.service._queue_emails", queued.append)
+    monkeypatch.setattr("apps.notifications.service._queue_delivery", queued.append)
     with django_capture_on_commit_callbacks(execute=True):
         (note,) = notify(member, "appointment", "Você agora é líder")
     assert queued == [[str(note.pk)]]

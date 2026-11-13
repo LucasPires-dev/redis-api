@@ -1,6 +1,7 @@
 from django.db.models import Q
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
+from .choices import CellRole
 from .models import (
     Campus,
     CampusCellsLeadership,
@@ -123,6 +124,18 @@ def can_coordinate_cells(person) -> bool:
     return person.is_manager or is_cells_general_leader(person)
 
 
+def season_church_ids(person, *, for_write=False):
+    """Churches whose seasons the person works with; None means every church
+    (the manager). Writing: the churches they're general cells leader of.
+    Reading also includes the church of their own campus."""
+    if person.is_manager:
+        return None
+    ids = set(CellGeneralLeadership.objects.filter(leaders=person).values_list("church_id", flat=True))
+    if not for_write and person.campus_id:
+        ids.add(person.campus.church_id)
+    return ids
+
+
 def led_campuses_cells(person):
     """Campuses whose cells the person is in charge of (CampusCellsLeadership)."""
     if not person.is_authenticated:
@@ -150,11 +163,31 @@ def can_assign_campus_cells_leader(person, campus) -> bool:
 
 
 def can_manage_cell(person, cell) -> bool:
+    """The cell's leadership (leader, co-leader, leader in training), its
+    supervisor, or whoever coordinates the campus's cells."""
     if not person.is_authenticated:
         return False
-    if cell.leaderships.filter(person=person).exists():
+    if cell.supervisor_id == person.pk or cell.leaderships.filter(person=person).exists():
         return True
     return can_coordinate_campus_cells(person, cell.campus)
+
+
+def can_supervise_cell(person, cell) -> bool:
+    """Supervision of a cell (visits, naming its leaders): its supervisor or
+    whoever coordinates the campus's cells."""
+    if not person.is_authenticated:
+        return False
+    return cell.supervisor_id == person.pk or can_coordinate_campus_cells(person, cell.campus)
+
+
+def can_appoint_cell_trainee(person, cell) -> bool:
+    """Who names the cell's leaders in training: its leader (each level
+    appoints the one below), or anyone above (supervisor, coordination)."""
+    if not person.is_authenticated:
+        return False
+    if any(lead.person_id == person.pk and lead.role == CellRole.LEADER for lead in cell.leaderships.all()):
+        return True
+    return can_supervise_cell(person, cell)
 
 
 def scope_cells(qs, person):
@@ -167,9 +200,74 @@ def scope_cells(qs, person):
     return qs.filter(
         Q(leaderships__person=person)
         | Q(members=person)
+        | Q(supervisor=person)
         | Q(campus__leaderships__person=person)
         | Q(campus__cells_leaderships__person=person)
     ).distinct()
+
+
+def scope_managed_cells(qs, person):
+    """Cells a person manages (same rule as can_manage_cell): the ones they
+    lead/co-lead and every cell of a campus they coordinate. Unlike scope_cells,
+    plain members are left out — used for the visitors' contact data."""
+    if can_coordinate_cells(person):
+        return qs
+    return qs.filter(
+        Q(leaderships__person=person)
+        | Q(supervisor=person)
+        | Q(campus__leaderships__person=person)
+        | Q(campus__cells_leaderships__person=person)
+    ).distinct()
+
+
+def scope_supervised_cells(qs, person):
+    """Cells whose supervision the person sees (visits and their notes): the
+    ones they supervise and every cell they coordinate."""
+    if can_coordinate_cells(person):
+        return qs
+    return qs.filter(
+        Q(supervisor=person)
+        | Q(campus__leaderships__person=person)
+        | Q(campus__cells_leaderships__person=person)
+    ).distinct()
+
+
+def scope_coordinated_cells(qs, person):
+    """Cells a person coordinates (the "coordinate" capability): every cell for
+    a manager or the general cells leader; otherwise the cells of the campuses
+    they lead or whose cells they're in charge of. Cells they only lead are
+    left out — used for the coordination report."""
+    if can_coordinate_cells(person):
+        return qs
+    return qs.filter(
+        Q(campus__leaderships__person=person) | Q(campus__cells_leaderships__person=person)
+    ).distinct()
+
+
+class CellVisitorPermission(BasePermission):
+    """Visitors (names and contacts) are for whoever manages the cell: read
+    is scoped by scope_managed_cells; writes check can_manage_cell (on create,
+    in the view, since the cell comes in the payload)."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        return can_manage_cell(request.user, obj.cell)
+
+
+class CellSupervisionVisitPermission(BasePermission):
+    """Supervision visits: read scoped by scope_supervised_cells; create checks
+    can_supervise_cell in the view (the cell comes in the payload); editing
+    or deleting is for the author or the campus's cells coordination."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return obj.created_by_id == request.user.pk or can_coordinate_campus_cells(request.user, obj.cell.campus)
 
 
 class CellPermission(BasePermission):
@@ -196,8 +294,9 @@ class CellPermission(BasePermission):
 
 
 class SeasonPermission(BasePermission):
-    """Read: anyone authenticated (seasons are church-wide public info).
-    Create/update/delete: manager or general cells leader."""
+    """Read: anyone authenticated, for their own church (queryset scoped).
+    Create/update/delete: manager, or the general cells leader of the
+    season's church (create checks the church in the view)."""
 
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
@@ -205,6 +304,12 @@ class SeasonPermission(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         return can_coordinate_cells(request.user)
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        ids = season_church_ids(request.user, for_write=True)
+        return ids is None or obj.church_id in ids
 
 
 def scope_cell_meetings(qs, person):

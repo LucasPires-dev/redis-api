@@ -91,7 +91,9 @@ def build_calendar(cell, meetings, today=None):
 
 def summarize(entries):
     held = [e.meeting for e in entries if e.status == REGISTERED]
-    attendance = [len(m.attendees.all()) + m.visitors_count for m in held]
+    # Visitors: the ones registered by name plus the ones counted by number.
+    visitors = [len(m.visitors.all()) + m.visitors_count for m in held]
+    attendance = [len(m.attendees.all()) + v for m, v in zip(held, visitors)]
     count = lambda status: sum(1 for e in entries if e.status == status)  # noqa: E731
     return {
         "scheduled": sum(1 for e in entries if e.scheduled_date),
@@ -100,7 +102,8 @@ def summarize(entries):
         "pending": count(PENDING),
         "upcoming": count(UPCOMING) + count(TODAY),
         "average_attendance": round(sum(attendance) / len(attendance)) if attendance else None,
-        "total_visitors": sum(m.visitors_count for m in held),
+        "total_visitors": sum(visitors),
+        "total_decisions": sum(m.decisions_count for m in held),
     }
 
 

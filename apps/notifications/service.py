@@ -10,6 +10,7 @@ from collections.abc import Iterable
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.db import transaction
 
 from .models import Notification
@@ -66,10 +67,23 @@ def notify(recipients, kind: str, title: str, *, body: str = "", link: str = "",
                 ignore_conflicts=bool(dedupe_key),
             )
         transaction.on_commit(lambda: _push(ids, title))
+        if settings.NOTIFICATION_EMAILS_ENABLED:
+            new_ids = [str(n.pk) for n in created]
+            transaction.on_commit(lambda: _queue_emails(new_ids))
         return created
     except Exception:
         logger.exception("Failed to raise notification %s", kind)
         return []
+
+
+def _queue_emails(notification_ids):
+    """Emails go out from the worker, so a slow SMTP never holds the request."""
+    from .tasks import send_notification_emails
+
+    try:
+        send_notification_emails.delay(notification_ids)
+    except Exception:
+        logger.warning("Couldn't queue notification emails", exc_info=True)
 
 
 def _push(person_ids, title):

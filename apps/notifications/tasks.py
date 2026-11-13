@@ -2,7 +2,7 @@ import logging
 
 from celery import shared_task
 
-from . import reminders
+from . import emails, reminders
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,11 @@ def run(batch) -> dict:
             results[reminder.__name__] = "error"
     logger.info("Reminders: %s", results)
     return results
+
+
+@shared_task
+def send_notification_emails(notification_ids):
+    return emails.send_emails(notification_ids)
 
 
 @shared_task

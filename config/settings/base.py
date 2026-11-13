@@ -155,6 +155,22 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
+# The app's public address, for links that leave the app (emails, certificates).
+FRONTEND_URL = config("FRONTEND_URL", default="")
+
+# Email (notifications). Any SMTP provider works (Resend, Amazon SES, Google
+# Workspace...): set EMAIL_HOST and its credentials. Without EMAIL_HOST no
+# notification email is sent; the notification center works the same.
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = config("EMAIL_HOST", default="")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+EMAIL_TIMEOUT = 15
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="Redis <nao-responda@localhost>")
+NOTIFICATION_EMAILS_ENABLED = config("NOTIFICATION_EMAILS_ENABLED", default=bool(EMAIL_HOST), cast=bool)
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",

@@ -25,6 +25,8 @@ class Notification(models.Model):
     link = models.CharField(max_length=300, blank=True)
     dedupe_key = models.CharField(max_length=150, blank=True)
     read_at = models.DateTimeField(null=True, blank=True)
+    # When it also went out by email (None: not sent, or not to be sent).
+    emailed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -45,3 +47,20 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.recipient} — {self.title}"
+
+
+class NotificationPreference(models.Model):
+    """What a person receives by email, by category (see categories.py). Stores
+    the categories turned *off*, so a new category starts on for everyone."""
+
+    person = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notification_preference"
+    )
+    email_off = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Preferências de {self.person}"
+
+    def wants_email(self, category) -> bool:
+        return category is not None and category not in self.email_off

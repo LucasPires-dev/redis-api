@@ -27,6 +27,18 @@ def test_free_event_registration_is_confirmed_right_away(api_client, regular_per
     assert registration.payment_status == PaymentStatus.CONFIRMED
 
 
+def test_own_registrations_list_carries_the_event(api_client, regular_person, event, free_config):
+    """The "Minhas inscrições" tab lists them without fetching every event."""
+    client = auth(api_client, regular_person)
+    client.post(URL, {"event_id": str(event.id)}, format="json")
+
+    rows = client.get(URL).data["results"]
+
+    assert len(rows) == 1
+    assert rows[0]["event"]["id"] == str(event.id)
+    assert rows[0]["event"]["title"] == event.title
+
+
 def test_paid_event_creates_an_asaas_charge(api_client, regular_person, event, paid_config, fake_asaas):
     response = auth(api_client, regular_person).post(URL, {"event_id": str(event.id)}, format="json")
 
@@ -63,8 +75,8 @@ def test_person_can_retry_after_a_failed_charge(api_client, regular_person, even
 def test_full_event_rejects_new_registrations(api_client, event, paid_config, fake_asaas):
     paid_config.max_capacity = 1
     paid_config.save()
-    first = make_person(email="primeiro@ilan.church", name="Primeiro", cpf="11144477735")
-    second = make_person(email="segundo@ilan.church", name="Segundo", cpf="11144477735")
+    first = make_person(campus=event.campus, email="primeiro@ilan.church", name="Primeiro", cpf="11144477735")
+    second = make_person(campus=event.campus, email="segundo@ilan.church", name="Segundo", cpf="11144477735")
 
     assert auth(api_client, first).post(URL, {"event_id": str(event.id)}, format="json").status_code == 201
     response = auth(api_client, second).post(URL, {"event_id": str(event.id)}, format="json")
@@ -139,7 +151,9 @@ def test_event_manager_sees_stats(api_client, jovens_leader, event, pending_regi
 def test_revenue_uses_the_amount_each_person_paid(api_client, jovens_leader, event, paid_config, fake_asaas):
     # Two people pay R$150, then the price goes up: revenue must stay R$300.
     for i in range(2):
-        person = make_person(email=f"pagante{i}@ilan.church", name=f"Pagante {i}", cpf="11144477735")
+        person = make_person(
+            campus=event.campus, email=f"pagante{i}@ilan.church", name=f"Pagante {i}", cpf="11144477735"
+        )
         auth(api_client, person).post(URL, {"event_id": str(event.id)}, format="json")
     EventRegistration.objects.filter(event=event).update(payment_status=PaymentStatus.CONFIRMED)
     paid_config.price_cents = 20000
@@ -199,7 +213,7 @@ def test_ticket_config_cannot_be_moved_to_another_event(api_client, jovens_leade
 
 
 def test_paid_event_asks_for_the_cpf_when_missing(api_client, event, paid_config, fake_asaas):
-    person = make_person(email="semcpf@ilan.church", name="Sem CPF")
+    person = make_person(campus=event.campus, email="semcpf@ilan.church", name="Sem CPF")
     response = auth(api_client, person).post(URL, {"event_id": str(event.id)}, format="json")
 
     assert response.status_code == 400
@@ -209,7 +223,7 @@ def test_paid_event_asks_for_the_cpf_when_missing(api_client, event, paid_config
 
 
 def test_cpf_typed_at_registration_is_kept_and_sent_to_asaas(api_client, event, paid_config, fake_asaas):
-    person = make_person(email="semcpf@ilan.church", name="Sem CPF")
+    person = make_person(campus=event.campus, email="semcpf@ilan.church", name="Sem CPF")
     response = auth(api_client, person).post(
         URL, {"event_id": str(event.id), "cpf": "111.444.777-35"}, format="json"
     )
@@ -222,7 +236,7 @@ def test_cpf_typed_at_registration_is_kept_and_sent_to_asaas(api_client, event, 
 
 
 def test_invalid_cpf_is_rejected(api_client, event, paid_config, fake_asaas):
-    person = make_person(email="semcpf@ilan.church", name="Sem CPF")
+    person = make_person(campus=event.campus, email="semcpf@ilan.church", name="Sem CPF")
     response = auth(api_client, person).post(
         URL, {"event_id": str(event.id), "cpf": "111.444.777-00"}, format="json"
     )
@@ -232,7 +246,7 @@ def test_invalid_cpf_is_rejected(api_client, event, paid_config, fake_asaas):
 
 
 def test_free_event_needs_no_cpf(api_client, event, free_config):
-    person = make_person(email="semcpf@ilan.church", name="Sem CPF")
+    person = make_person(campus=event.campus, email="semcpf@ilan.church", name="Sem CPF")
     response = auth(api_client, person).post(URL, {"event_id": str(event.id)}, format="json")
 
     assert response.status_code == 201, response.data

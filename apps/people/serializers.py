@@ -241,6 +241,9 @@ class MeSerializer(serializers.ModelSerializer):
     # screens ask for it only when it is missing.
     has_cpf = serializers.SerializerMethodField()
 
+    # Per-area flags that drive the tabs of each screen (see apps.people.capabilities).
+    capabilities = serializers.SerializerMethodField()
+
     class Meta:
         model = Person
         fields = [
@@ -266,6 +269,7 @@ class MeSerializer(serializers.ModelSerializer):
             "is_event_producer",
             "producer_campuses",
             "total_points",
+            "capabilities",
         ]
 
     def get_led_ministries(self, obj):
@@ -326,3 +330,8 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_has_cpf(self, obj):
         return bool(obj.cpf)
+
+    def get_capabilities(self, obj):
+        from apps.people.capabilities import capabilities
+
+        return capabilities(obj)

@@ -19,7 +19,13 @@ from .models import (
     Lesson,
     LessonAttendance,
 )
-from .permissions import can_manage_class, can_manage_class_finances
+from .permissions import (
+    can_coordinate_campus_courses,
+    can_manage_class,
+    can_manage_class_finances,
+    can_manage_course,
+    coordinated_course_campuses,
+)
 
 Person = get_user_model()
 
@@ -38,12 +44,17 @@ class CourseSerializer(serializers.ModelSerializer):
     campus_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
     class_count = serializers.SerializerMethodField()
     total_enrolled = serializers.SerializerMethodField()
+    # Edit/delete the course (can_manage_course).
+    can_manage = serializers.SerializerMethodField()
+    # Open a class: the course's managers, or — for a church-wide course — the
+    # local coordinators, at their campus.
+    can_add_class = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
         fields = [
             "id", "name", "description", "campus", "campus_id",
-            "class_count", "total_enrolled", "created_at",
+            "class_count", "total_enrolled", "can_manage", "can_add_class", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -55,6 +66,24 @@ class CourseSerializer(serializers.ModelSerializer):
             course_class__course=obj,
             status=EnrollmentStatus.ACTIVE,
         ).count()
+
+    def _user(self):
+        request = self.context.get("request")
+        return request.user if request else None
+
+    def get_can_manage(self, obj):
+        user = self._user()
+        return bool(user) and can_manage_course(user, obj)
+
+    def get_can_add_class(self, obj):
+        user = self._user()
+        if not user:
+            return False
+        if can_manage_course(user, obj):
+            return True
+        if obj.campus_id:
+            return can_coordinate_campus_courses(user, obj.campus)
+        return coordinated_course_campuses(user).exists()
 
 
 # ── CourseClass (turma) ─────────────────────────────────────────────────────

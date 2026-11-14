@@ -9,6 +9,7 @@ from apps.payments.serializers import EventTicketInputSerializer, validate_ticke
 
 from .choices import ItemStatus
 from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
+from .permissions import can_manage_demand_source, can_manage_demand_target, can_manage_event
 
 Person = get_user_model()
 
@@ -82,6 +83,8 @@ class EventSerializer(serializers.ModelSerializer):
     ticket = EventTicketInputSerializer(write_only=True, required=False, allow_null=True)
     # Read-only summary for lists and cards (price badge, capacity).
     ticket_config = serializers.SerializerMethodField()
+    # Edit the event, its rundown, ticket and attendee list (can_manage_event).
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = Event
@@ -101,9 +104,14 @@ class EventSerializer(serializers.ModelSerializer):
             "rundown_items",
             "ticket",
             "ticket_config",
+            "can_manage",
             "created_at",
         ]
         read_only_fields = ["created_at"]
+
+    def get_can_manage(self, obj):
+        request = self.context.get("request")
+        return bool(request) and can_manage_event(request.user, obj)
 
     def get_ticket_config(self, obj):
         try:
@@ -163,6 +171,8 @@ class DemandPersonMiniSerializer(serializers.ModelSerializer):
 
 class DemandSerializer(serializers.ModelSerializer):
     event = EventMiniSerializer(read_only=True)
+    can_answer = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
     event_id = serializers.PrimaryKeyRelatedField(
         queryset=Event.objects.all(), source="event", write_only=True, required=False, allow_null=True
     )
@@ -200,8 +210,24 @@ class DemandSerializer(serializers.ModelSerializer):
             "created_by",
             "created_at",
             "updated_at",
+            "can_answer",
+            "can_edit",
         ]
         read_only_fields = ["status", "rejection_reason", "created_by", "created_at", "updated_at"]
+
+    def _user(self):
+        request = self.context.get("request")
+        return request.user if request else None
+
+    def get_can_answer(self, obj):
+        """Accept / complete / reject: the side that received the demand."""
+        user = self._user()
+        return bool(user) and can_manage_demand_target(user, obj)
+
+    def get_can_edit(self, obj):
+        """Edit / cancel while open: the side that opened it."""
+        user = self._user()
+        return bool(user) and can_manage_demand_source(user, obj)
 
     def validate_to_ministry_kind(self, value):
         if value not in PRODUCTION_MINISTRY_KINDS:

@@ -91,11 +91,14 @@ def can_manage_class_finances(person, course_class) -> bool:
 
 def scope_courses(qs, person):
     """Courses visible to the person: everything for church-wide coordinators;
-    otherwise church-wide courses plus the courses of campuses they coordinate."""
+    otherwise church-wide courses, the courses of campuses they coordinate and
+    the courses of the classes they teach (even a campus course elsewhere)."""
     if can_coordinate_courses(person):
         return qs
     campus_ids = coordinated_course_campuses(person).values("id")
-    return qs.filter(Q(campus__isnull=True) | Q(campus_id__in=campus_ids)).distinct()
+    return qs.filter(
+        Q(campus__isnull=True) | Q(campus_id__in=campus_ids) | Q(classes__teachers__person=person)
+    ).distinct()
 
 
 def scope_classes(qs, person):

@@ -50,7 +50,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        qs = EventRegistration.objects.select_related("person", "event")
+        qs = EventRegistration.objects.select_related("person", "event", "event__campus")
         event_id = self.request.query_params.get("event")
         # ?mine=1: only the caller's own registrations, even for an event manager
         # (who otherwise gets everyone's, for the attendee list).
@@ -65,6 +65,10 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         event = serializer.validated_data["event"]
         cpf = serializer.validated_data.pop("cpf", "")
+
+        # Only events the person can see (knowing the id is not enough).
+        if not scope_events(Event.objects.filter(pk=event.pk), self.request.user).exists():
+            raise drf_serializers.ValidationError({"event_id": "Evento não encontrado."})
 
         try:
             config = event.ticket_config

@@ -1,10 +1,28 @@
+from datetime import timedelta
+
+from django.db.models import Prefetch, Q
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import viewsets
+from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from .choices import DemandStatus, RosterStatus
-from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
+from apps.churches.models import Ministry
+from apps.churches.permissions import can_manage_ministry
+from apps.notifications import triggers
+
+from . import roster
+from .choices import DemandStatus, RosterStatus, SwapStatus
+from .models import (
+    Demand,
+    Event,
+    EventChecklistItem,
+    EventRosterEntry,
+    RosterSwapRequest,
+    RundownItem,
+    RundownItemStatus,
+)
 from .permissions import (
     PRODUCER_EVENT_TYPES,
     DemandPermission,
@@ -23,8 +41,10 @@ from .serializers import (
     EventRosterEntrySerializer,
     EventSerializer,
     RejectDemandInputSerializer,
+    RosterSwapSerializer,
     RundownItemSerializer,
     SetItemStatusInputSerializer,
+    SwapInputSerializer,
 )
 
 
@@ -96,6 +116,7 @@ class DemandViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         demand = serializer.save(created_by=self.request.user, status=DemandStatus.OPEN)
+        triggers.demand_received(demand)
         if demand.event_id:
             broadcast_event_update(demand.event_id, "demand")
 
@@ -104,6 +125,7 @@ class DemandViewSet(viewsets.ModelViewSet):
         demand = self.get_object()  # has_object_permission -> can_manage_demand_target
         demand.status = DemandStatus.IN_PROGRESS
         demand.save(update_fields=["status", "updated_at"])
+        triggers.demand_answered(demand, request.user)
         if demand.event_id:
             broadcast_event_update(demand.event_id, "demand")
         return Response(DemandSerializer(demand).data)
@@ -113,6 +135,7 @@ class DemandViewSet(viewsets.ModelViewSet):
         demand = self.get_object()
         demand.status = DemandStatus.DONE
         demand.save(update_fields=["status", "updated_at"])
+        triggers.demand_answered(demand, request.user)
         if demand.event_id:
             broadcast_event_update(demand.event_id, "demand")
         return Response(DemandSerializer(demand).data)
@@ -125,6 +148,7 @@ class DemandViewSet(viewsets.ModelViewSet):
         demand.status = DemandStatus.REJECTED
         demand.rejection_reason = serializer.validated_data["rejection_reason"]
         demand.save(update_fields=["status", "rejection_reason", "updated_at"])
+        triggers.demand_answered(demand, request.user)
         if demand.event_id:
             broadcast_event_update(demand.event_id, "demand")
         return Response(DemandSerializer(demand).data)
@@ -135,15 +159,60 @@ class EventRosterEntryViewSet(viewsets.ModelViewSet):
     permission_classes = [EventRosterEntryPermission]
 
     def get_queryset(self):
-        qs = EventRosterEntry.objects.select_related("ministry", "person", "event")
+        qs = EventRosterEntry.objects.select_related("ministry", "person", "event", "event__campus").prefetch_related(
+            Prefetch(
+                "swap_requests",
+                queryset=RosterSwapRequest.objects.filter(status=SwapStatus.PENDING).select_related("substitute"),
+            )
+        )
         event_id = self.request.query_params.get("event")
         if event_id:
             qs = qs.filter(event_id=event_id)
-        return qs.filter(event__in=scope_events(Event.objects.all(), self.request.user))
+        user = self.request.user
+        # The person always sees their own entries (to answer them).
+        return qs.filter(Q(event__in=scope_events(Event.objects.all(), user)) | Q(person=user)).distinct()
 
     def perform_create(self, serializer):
         entry = serializer.save(invited_by=self.request.user)
+        triggers.roster_invited(entry)
         broadcast_event_update(entry.event_id, "roster_entry")
+
+    @action(detail=False, methods=["get"])
+    def mine(self, request):
+        """Where I serve: upcoming (and just started) events, soonest first."""
+        since = timezone.now() - timedelta(hours=6)
+        entries = self.get_queryset().filter(person=request.user, event__starts_at__gte=since)
+        return Response(EventRosterEntrySerializer(entries.order_by("event__starts_at"), many=True).data)
+
+    @action(detail=False, methods=["get"])
+    def conflicts(self, request):
+        """Before inviting: is the person already serving at the same time?"""
+        event = get_object_or_404(Event, pk=request.query_params.get("event"))
+        ministry = get_object_or_404(Ministry, pk=request.query_params.get("ministry"))
+        if not can_manage_ministry(request.user, ministry):
+            raise PermissionDenied("Só a liderança do ministério convida para a escala.")
+        found = roster.conflicts(request.query_params.get("person"), event)
+        return Response([{"id": e.pk, "title": e.title, "starts_at": e.starts_at} for e in found])
+
+    @action(detail=True, methods=["get"], url_path="swap-candidates")
+    def swap_candidates(self, request, pk=None):
+        entry = self.get_object()
+        if entry.person_id != request.user.pk and not can_manage_ministry(request.user, entry.ministry):
+            raise PermissionDenied()
+        people = roster.swap_candidates(entry)
+        return Response(
+            [{"id": p.pk, "name": p.name, "conflict": bool(roster.conflicts(p.pk, entry.event))} for p in people]
+        )
+
+    @action(detail=True, methods=["post"])
+    def swap(self, request, pk=None):
+        entry = self.get_object()  # has_object_permission -> only the person on the entry
+        data = SwapInputSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        swap = roster.request_swap(
+            entry, request.user, data.validated_data["substitute_id"], data.validated_data["message"]
+        )
+        return Response(RosterSwapSerializer(swap).data, status=201)
 
     @action(detail=True, methods=["post"], url_path="confirm")
     def confirm(self, request, pk=None):
@@ -160,8 +229,49 @@ class EventRosterEntryViewSet(viewsets.ModelViewSet):
         entry.status = RosterStatus.DECLINED
         entry.responded_at = timezone.now()
         entry.save(update_fields=["status", "responded_at"])
+        entry.swap_requests.filter(status=SwapStatus.PENDING).update(
+            status=SwapStatus.CANCELLED, responded_at=entry.responded_at
+        )
+        triggers.roster_declined(entry, request.user)
         broadcast_event_update(entry.event_id, "roster_entry")
         return Response(EventRosterEntrySerializer(entry).data)
+
+
+class RosterSwapViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Swap requests I made or that were made to me: pending ones by default,
+    every one with ?status=all."""
+
+    serializer_class = RosterSwapSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = RosterSwapRequest.objects.filter(Q(requested_by=user) | Q(substitute=user)).select_related(
+            "entry__event__campus", "entry__ministry", "requested_by", "substitute"
+        )
+        if self.request.query_params.get("status", "pending") != "all":
+            qs = qs.filter(status=SwapStatus.PENDING)
+        return qs
+
+    def _answer(self, request, fn, who):
+        swap = self.get_object()
+        if getattr(swap, f"{who}_id") != request.user.pk:
+            raise PermissionDenied()
+        fn(swap)
+        swap.refresh_from_db()
+        broadcast_event_update(swap.entry.event_id, "roster_entry")
+        return Response(RosterSwapSerializer(swap).data)
+
+    @action(detail=True, methods=["post"])
+    def accept(self, request, pk=None):
+        return self._answer(request, roster.accept_swap, "substitute")
+
+    @action(detail=True, methods=["post"])
+    def decline(self, request, pk=None):
+        return self._answer(request, roster.decline_swap, "substitute")
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        return self._answer(request, roster.cancel_swap, "requested_by")
 
 
 class EventChecklistItemViewSet(viewsets.ModelViewSet):

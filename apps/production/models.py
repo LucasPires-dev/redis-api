@@ -13,6 +13,7 @@ from .choices import (
     EventType,
     ItemStatus,
     RosterStatus,
+    SwapStatus,
 )
 
 
@@ -162,6 +163,34 @@ class EventRosterEntry(models.Model):
 
     def __str__(self):
         return f"{self.person} — {self.ministry} ({self.get_status_display()})"
+
+
+class RosterSwapRequest(models.Model):
+    """Someone on the roster who can't serve asks another member of the same
+    ministry to take their place. When the substitute accepts, the roster entry
+    passes to them (confirmed); nobody has to redo the invitation."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    entry = models.ForeignKey(EventRosterEntry, on_delete=models.CASCADE, related_name="swap_requests")
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    substitute = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    message = models.CharField(max_length=300, blank=True)
+    status = models.CharField(max_length=16, choices=SwapStatus.choices, default=SwapStatus.PENDING)
+    responded_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["entry"],
+                condition=models.Q(status="pending"),
+                name="one_pending_swap_per_entry",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.requested_by} → {self.substitute} ({self.get_status_display()})"
 
 
 class EventChecklistItem(models.Model):

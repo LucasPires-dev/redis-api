@@ -176,6 +176,7 @@ def scope_events(qs, person):
     condition = (
         Q(created_by=person)
         | Q(producer=person)
+        | Q(roster_entries__person=person)
         | Q(campus__isnull=True, ministry_kind__isnull=True)
         | Q(campus__leaderships__person=person)
         | Q(campus__ministries__kind=F("ministry_kind"), campus__ministries__leaderships__person=person)
@@ -362,6 +363,8 @@ class EventRosterEntryPermission(BasePermission):
             return True
         if view.action in ("confirm", "decline"):
             return can_respond_roster_entry(request.user, obj)
+        if view.action == "swap":
+            return obj.person_id == request.user.pk
         return can_manage_ministry(request.user, obj.ministry)
 
 

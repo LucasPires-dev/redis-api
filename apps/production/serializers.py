@@ -7,8 +7,16 @@ from apps.churches.models import Campus, Ministry
 from apps.payments.models import EventTicketConfig
 from apps.payments.serializers import EventTicketInputSerializer, validate_ticket_rules
 
-from .choices import ItemStatus
-from .models import Demand, Event, EventChecklistItem, EventRosterEntry, RundownItem, RundownItemStatus
+from .choices import ItemStatus, RosterStatus, SwapStatus
+from .models import (
+    Demand,
+    Event,
+    EventChecklistItem,
+    EventRosterEntry,
+    RosterSwapRequest,
+    RundownItem,
+    RundownItemStatus,
+)
 from .permissions import can_manage_demand_source, can_manage_demand_target, can_manage_event
 
 Person = get_user_model()
@@ -269,11 +277,15 @@ class EventRosterEntrySerializer(serializers.ModelSerializer):
         queryset=Person.objects.all(), source="person", write_only=True
     )
     event_id = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all(), source="event", write_only=True)
+    event = EventMiniSerializer(read_only=True)
+    conflicts = serializers.SerializerMethodField()
+    pending_swap = serializers.SerializerMethodField()
 
     class Meta:
         model = EventRosterEntry
         fields = [
             "id",
+            "event",
             "event_id",
             "ministry",
             "ministry_id",
@@ -283,8 +295,50 @@ class EventRosterEntrySerializer(serializers.ModelSerializer):
             "status",
             "responded_at",
             "created_at",
+            "conflicts",
+            "pending_swap",
         ]
         read_only_fields = ["status", "responded_at", "created_at"]
+
+    def get_conflicts(self, entry):
+        """Other events at the same time where the person serves (a warning)."""
+        from .roster import conflicts
+
+        if entry.status == RosterStatus.DECLINED:
+            return []
+        found = conflicts(entry.person_id, entry.event)
+        return [{"id": e.pk, "title": e.title, "starts_at": e.starts_at} for e in found]
+
+    def get_pending_swap(self, entry):
+        swap = next((s for s in entry.swap_requests.all() if s.status == SwapStatus.PENDING), None)
+        if swap is None:
+            return None
+        return {"id": swap.pk, "substitute": {"id": swap.substitute_id, "name": swap.substitute.name}}
+
+
+class RosterSwapEntrySerializer(serializers.ModelSerializer):
+    event = EventMiniSerializer(read_only=True)
+    ministry = ProductionMinistryMiniSerializer(read_only=True)
+
+    class Meta:
+        model = EventRosterEntry
+        fields = ["id", "event", "ministry", "function"]
+
+
+class RosterSwapSerializer(serializers.ModelSerializer):
+    entry = RosterSwapEntrySerializer(read_only=True)
+    requested_by = DemandPersonMiniSerializer(read_only=True)
+    substitute = DemandPersonMiniSerializer(read_only=True)
+
+    class Meta:
+        model = RosterSwapRequest
+        fields = ["id", "entry", "requested_by", "substitute", "message", "status", "responded_at", "created_at"]
+        read_only_fields = fields
+
+
+class SwapInputSerializer(serializers.Serializer):
+    substitute_id = serializers.PrimaryKeyRelatedField(queryset=Person.objects.filter(is_active=True))
+    message = serializers.CharField(max_length=300, required=False, allow_blank=True, default="")
 
 
 class EventChecklistItemSerializer(serializers.ModelSerializer):

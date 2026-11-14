@@ -24,6 +24,20 @@ CATEGORIES = {
         "description": "Inscrições confirmadas e lembretes na véspera.",
         "kinds": {"event_registration", "event_tomorrow"},
     },
+    "service": {
+        "label": "Escalas e produção",
+        "description": "Convites de escala, trocas, lembretes de quando você serve e demandas entre ministérios.",
+        "kinds": {
+            "roster_invite",
+            "roster_declined",
+            "roster_swap",
+            "roster_swap_answered",
+            "roster_tomorrow",
+            "roster_unanswered",
+            "demand_received",
+            "demand_answered",
+        },
+    },
     "church": {
         "label": "Vínculo e responsabilidades",
         "description": "Pedidos de vínculo ao campus e novas responsabilidades.",

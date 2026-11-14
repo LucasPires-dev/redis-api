@@ -18,7 +18,8 @@ from apps.courses import billing, course_report, waitlist
 from apps.courses.choices import EnrollmentPaymentStatus, EnrollmentStatus
 from apps.courses.models import CourseClass, Enrollment, WaitlistEntry
 from apps.payments.models import EventRegistration, PaymentStatus
-from apps.production.choices import EventStatus
+from apps.production.choices import EventStatus, RosterStatus
+from apps.production.models import EventRosterEntry
 
 from .models import Notification
 from .service import notify
@@ -159,6 +160,59 @@ def events_tomorrow(today=None):
     return sent
 
 
+def _serving(entry) -> str:
+    return entry.ministry.name + (f" · {entry.function}" if entry.function else "")
+
+
+def roster_tomorrow(today=None):
+    """The day before, to everyone confirmed on an event's roster."""
+    today = today or timezone.localdate()
+    entries = EventRosterEntry.objects.filter(
+        status=RosterStatus.CONFIRMED, event__starts_at__date=today + timedelta(days=1)
+    ).exclude(event__status=EventStatus.CLOSED).select_related("event", "ministry")
+    sent = 0
+    for entry in entries:
+        event = entry.event
+        sent += len(
+            notify(
+                entry.person_id,
+                "roster_tomorrow",
+                f"Amanhã você serve: {event.title}",
+                body=f"{_serving(entry)}. Começa às {timezone.localtime(event.starts_at):%H:%M}.",
+                link="/app/eventos/escalas",
+                dedupe_key=f"roster-tomorrow:{entry.pk}:{entry.person_id}",
+            )
+        )
+    return sent
+
+
+ANSWER_WITHIN = timedelta(days=3)
+
+
+def roster_unanswered(today=None):
+    """Invitations still without an answer when the event is a few days away."""
+    today = today or timezone.localdate()
+    entries = EventRosterEntry.objects.filter(
+        status=RosterStatus.INVITED,
+        event__starts_at__date__gt=today,
+        event__starts_at__date__lte=today + ANSWER_WITHIN,
+    ).exclude(event__status=EventStatus.CLOSED).select_related("event", "ministry")
+    sent = 0
+    for entry in entries:
+        sent += len(
+            notify(
+                entry.person_id,
+                "roster_unanswered",
+                f"Responda à escala: {entry.event.title}",
+                body=f"{_serving(entry)}, {when_text(entry.event.starts_at)}. Confirme ou recuse para a "
+                "liderança se organizar.",
+                link="/app/eventos/escalas",
+                dedupe_key=f"roster-unanswered:{entry.pk}:{entry.person_id}",
+            )
+        )
+    return sent
+
+
 def clean_up(now=None):
     """Old notifications go away, so the center stays light."""
     now = now or timezone.now()
@@ -233,5 +287,5 @@ def classes_to_care(today=None):
 
 
 HOURLY = [refresh_waitlists, reservations_expiring, offers_expiring]
-DAILY = [meetings_not_registered, events_tomorrow, clean_up]
+DAILY = [meetings_not_registered, events_tomorrow, roster_tomorrow, roster_unanswered, clean_up]
 WEEKLY = [cells_to_care, classes_to_care]

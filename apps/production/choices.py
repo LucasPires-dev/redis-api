@@ -48,3 +48,10 @@ class RosterStatus(models.TextChoices):
     INVITED = "invited", "Convidado"
     CONFIRMED = "confirmed", "Confirmado"
     DECLINED = "declined", "Recusado"
+
+
+class SwapStatus(models.TextChoices):
+    PENDING = "pending", "Aguardando"
+    ACCEPTED = "accepted", "Aceita"
+    DECLINED = "declined", "Recusada"
+    CANCELLED = "cancelled", "Cancelada"

@@ -47,9 +47,33 @@ class LeadershipRole(models.TextChoices):
     CO_LEADER = "co_leader", "Colíder"
 
 
+class CellRole(models.TextChoices):
+    """Roles in a célula. Like LeadershipRole plus the leader in training
+    ("Timóteo"), who is being prepared to lead the cell born from a
+    multiplication. Kept apart so the extra role doesn't reach ministries."""
+
+    LEADER = "leader", "Líder"
+    CO_LEADER = "co_leader", "Colíder"
+    TRAINEE = "trainee", "Líder em treinamento"
+
+
+class SupervisionVisitKind(models.TextChoices):
+    MEETING = "meeting", "Visita ao encontro"
+    LEADERSHIP = "leadership", "Conversa com a liderança"
+
+
 class ActivityKind(models.TextChoices):
     DAILY = "daily", "Diária"
     EVENTUAL = "eventual", "Eventual"
+
+
+class VisitorStatus(models.TextChoices):
+    """Where a cell visitor stands: still visiting, joined the cell, or handed
+    over to the Reconciliação ministry for follow-up (consolidação)."""
+
+    VISITING = "visiting", "Visitante"
+    MEMBER = "member", "Virou membro"
+    FORWARDED = "forwarded", "Encaminhado à Reconciliação"
 
 
 class Weekday(models.IntegerChoices):

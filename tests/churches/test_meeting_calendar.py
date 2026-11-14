@@ -23,7 +23,12 @@ def unsaved_cell(meeting_day=3):
 def meeting(day, held=True, attendees=0, visitors=0):
     people = [object()] * attendees
     return SimpleNamespace(
-        date=date(2026, 8, day), held=held, visitors_count=visitors, attendees=SimpleNamespace(all=lambda: people)
+        date=date(2026, 8, day),
+        held=held,
+        visitors_count=visitors,
+        decisions_count=0,
+        attendees=SimpleNamespace(all=lambda: people),
+        visitors=SimpleNamespace(all=lambda: []),
     )
 
 

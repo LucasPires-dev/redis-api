@@ -40,7 +40,7 @@ def cell(campus, season):
 def test_plain_member_has_no_management_flags(api_client, regular_person):
     caps = me(api_client, regular_person)
     assert caps == {
-        "cells": {"lead": False, "coordinate": False},
+        "cells": {"lead": False, "coordinate": False, "supervise": False},
         "courses": {"teach": False, "coordinate": False, "coordinate_all": False},
         "events": {"create": False, "produce": False, "production": False},
     }
@@ -58,7 +58,7 @@ def test_cell_leader_who_coordinates_keeps_both(api_client, campus, cell):
     CellLeadership.objects.create(cell=cell, person=person, role=LeadershipRole.LEADER)
     CampusCellsLeadership.objects.create(campus=campus, person=person, role=LeadershipRole.LEADER)
     caps = me(api_client, person)
-    assert caps["cells"] == {"lead": True, "coordinate": True}
+    assert caps["cells"] == {"lead": True, "coordinate": True, "supervise": False}
 
 
 def test_campus_leader_coordinates_campus_cells_and_courses(api_client, campus_leader):

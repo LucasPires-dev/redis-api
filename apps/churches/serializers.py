@@ -4,8 +4,8 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 
-from . import meeting_calendar
-from .choices import LeadershipRole
+from . import cell_health, meeting_calendar
+from .choices import CellAudience, CellRole, LeadershipRole, Weekday
 from .models import (
     Activity,
     ActivityCompletion,
@@ -15,6 +15,8 @@ from .models import (
     Cell,
     CellLeadership,
     CellMeeting,
+    CellSupervisionVisit,
+    CellVisitor,
     Church,
     Ministry,
     MinistryGeneralLeadership,
@@ -24,7 +26,12 @@ from .models import (
     TeamLeadership,
     TeamPointAward,
 )
-from .permissions import can_coordinate_campus_cells, can_manage_cell
+from .permissions import (
+    can_appoint_cell_trainee,
+    can_coordinate_campus_cells,
+    can_manage_cell,
+    can_supervise_cell,
+)
 
 Person = get_user_model()
 
@@ -183,7 +190,13 @@ class CellLeadershipSerializer(serializers.ModelSerializer):
 
 class CellLeadershipInputSerializer(serializers.Serializer):
     person_id = serializers.UUIDField()
-    role = serializers.ChoiceField(choices=LeadershipRole.choices)
+    role = serializers.ChoiceField(choices=CellRole.choices)
+
+
+class CellMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cell
+        fields = ["id", "name"]
 
 
 class CellMemberSerializer(serializers.Serializer):
@@ -257,7 +270,26 @@ class CellSerializer(serializers.ModelSerializer):
     can_coordinate = serializers.SerializerMethodField()
     leaders = serializers.SerializerMethodField()
     co_leaders = serializers.SerializerMethodField()
+    # Líderes em treinamento.
+    trainees = serializers.SerializerMethodField()
+    # Multiplication: the mother cell, when this one was born, and the plan.
+    parent_cell = CellMiniSerializer(read_only=True)
+    multiplication_leader = PersonMiniSerializer(read_only=True)
+    # Whether the requesting user may appoint the cell's leaders in training:
+    # its leader (each level appoints the one below) or anyone above.
+    can_appoint_trainee = serializers.SerializerMethodField()
+    # Supervisão: who supervises the cell, whether the requesting user does
+    # supervision here (supervisor or coordination: visits, naming leaders),
+    # and the date of the last supervision visit (only for them).
+    supervisor = PersonMiniSerializer(read_only=True)
+    can_supervise = serializers.SerializerMethodField()
+    last_supervision_visit = serializers.SerializerMethodField()
     member_count = serializers.IntegerField(source="members.count", read_only=True)
+    # Everyone in the cell: leaders, co-leaders and members, each counted once
+    # (a leader isn't always in `members`). What the screens show as "membros".
+    participant_count = serializers.SerializerMethodField()
+    # How the cell is doing (see cell_health.py) — only for whoever manages it.
+    health = serializers.SerializerMethodField()
     # Past scheduled meetings nobody registered (see meeting_calendar.py).
     pending_meetings = serializers.SerializerMethodField()
     # Required fields still empty (cells created before they were required);
@@ -290,16 +322,33 @@ class CellSerializer(serializers.ModelSerializer):
             "effective_start",
             "effective_end",
             "previous_cell",
+            "parent_cell",
+            "multiplied_on",
+            "multiplication_date",
+            "multiplication_leader",
             "leaders",
             "co_leaders",
+            "trainees",
             "member_count",
+            "participant_count",
             "pending_meetings",
+            "health",
             "missing_fields",
             "can_manage",
             "can_coordinate",
+            "can_appoint_trainee",
+            "supervisor",
+            "can_supervise",
+            "last_supervision_visit",
         ]
-        # Set only by the "renew" action.
-        read_only_fields = ["previous_cell"]
+        # Set only by the "renew", "multiply" and "multiplication-plan" actions.
+        read_only_fields = ["previous_cell", "multiplied_on", "multiplication_date"]
+
+    def get_participant_count(self, obj):
+        # Iterates the prefetched relations (CellViewSet) instead of querying.
+        people = {leadership.person_id for leadership in obj.leaderships.all()}
+        people.update(member.pk for member in obj.members.all())
+        return len(people)
 
     def get_leaders(self, obj):
         return PersonMiniSerializer(obj.leaders(), many=True).data
@@ -307,9 +356,31 @@ class CellSerializer(serializers.ModelSerializer):
     def get_co_leaders(self, obj):
         return PersonMiniSerializer(obj.co_leaders(), many=True).data
 
+    def get_trainees(self, obj):
+        return PersonMiniSerializer(obj.trainees(), many=True).data
+
+    def get_can_supervise(self, obj):
+        request = self.context.get("request")
+        return bool(request) and can_supervise_cell(request.user, obj)
+
+    def get_last_supervision_visit(self, obj):
+        if not self.get_can_supervise(obj):
+            return None
+        return max((visit.date for visit in obj.supervision_visits.all()), default=None)
+
+    def get_can_appoint_trainee(self, obj):
+        request = self.context.get("request")
+        return bool(request) and can_appoint_cell_trainee(request.user, obj)
+
     def get_can_manage(self, obj):
         request = self.context.get("request")
         return bool(request) and can_manage_cell(request.user, obj)
+
+    def get_health(self, obj):
+        request = self.context.get("request")
+        if not (request and can_manage_cell(request.user, obj)):
+            return None
+        return cell_health.cell_health(obj, obj.meetings.all())
 
     def get_pending_meetings(self, obj):
         return meeting_calendar.pending_count(obj, obj.meetings.all())
@@ -356,12 +427,136 @@ class CellSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class CellSupervisorInputSerializer(serializers.Serializer):
+    """PUT /cells/{id}/supervisor/: who supervises the cell (null clears)."""
+
+    person_id = serializers.UUIDField(allow_null=True)
+
+
+class CellSupervisionVisitSerializer(serializers.ModelSerializer):
+    """A supervision visit. The cell comes in on create (cell_id); the author
+    is the requesting user."""
+
+    cell_id = serializers.PrimaryKeyRelatedField(source="cell", queryset=Cell.objects.all(), write_only=True)
+    cell = CellMiniSerializer(read_only=True)
+    kind_display = serializers.CharField(source="get_kind_display", read_only=True)
+    created_by = PersonMiniSerializer(read_only=True)
+
+    class Meta:
+        model = CellSupervisionVisit
+        fields = ["id", "cell", "cell_id", "date", "kind", "kind_display", "notes", "created_by", "created_at"]
+        read_only_fields = ["created_at"]
+
+    def validate(self, attrs):
+        # The cell can't change after the visit is registered.
+        if self.instance and "cell" in attrs and attrs["cell"] != self.instance.cell:
+            raise serializers.ValidationError({"cell_id": "A visita não pode mudar de célula."})
+        return attrs
+
+
+class CellMultiplicationPlanInputSerializer(serializers.Serializer):
+    """PUT /cells/{id}/multiplication-plan/: when the cell should multiply and
+    who should lead the new cell (someone of the cell). Both may be null."""
+
+    date = serializers.DateField(allow_null=True)
+    leader_id = serializers.UUIDField(allow_null=True)
+
+
+class CellMultiplyInputSerializer(serializers.Serializer):
+    """POST /cells/{id}/multiply/: the new cell's name and leader, the people
+    who move to it, and its schedule (the mother's when left out)."""
+
+    name = serializers.CharField(max_length=150)
+    leader_id = serializers.UUIDField()
+    member_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
+    meeting_day = serializers.ChoiceField(choices=Weekday.choices, required=False)
+    meeting_time = serializers.TimeField(input_formats=["%H:%M", "%H:%M:%S"], required=False)
+    target_audience = serializers.ChoiceField(choices=CellAudience.choices, required=False)
+    address = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Informe o nome da nova célula.")
+        return value
+
+
 class CellRenewInputSerializer(serializers.Serializer):
     """Payload for POST /cells/{id}/renew/: carry a cell over to another season."""
 
     season_id = serializers.PrimaryKeyRelatedField(queryset=Season.objects.all())
     # Copy the current members into the new cell (leaders are always copied).
     copy_members = serializers.BooleanField(default=True)
+
+
+class CellVisitorMiniSerializer(serializers.ModelSerializer):
+    """Name only — what a meeting shows about its guests (no contact data)."""
+
+    class Meta:
+        model = CellVisitor
+        fields = ["id", "name", "status"]
+
+
+class CellVisitorSerializer(serializers.ModelSerializer):
+    """A cell's guest. Status changes only through the forward/make-member
+    actions. visit_count / first_visit / last_visit come from the meetings the
+    visitor is marked in (annotated by CellVisitorViewSet)."""
+
+    cell_id = serializers.PrimaryKeyRelatedField(source="cell", queryset=Cell.objects.all(), write_only=True)
+    person = PersonMiniSerializer(read_only=True)
+    forwarded = serializers.SerializerMethodField()
+    visit_count = serializers.IntegerField(read_only=True, default=0)
+    first_visit = serializers.DateField(read_only=True, default=None)
+    last_visit = serializers.DateField(read_only=True, default=None)
+
+    class Meta:
+        model = CellVisitor
+        fields = [
+            "id",
+            "cell",
+            "cell_id",
+            "name",
+            "phone",
+            "email",
+            "notes",
+            "status",
+            "person",
+            "forwarded",
+            "visit_count",
+            "first_visit",
+            "last_visit",
+            "created_at",
+        ]
+        read_only_fields = ["cell", "status"]
+
+    def get_forwarded(self, obj):
+        return obj.reconciliation_lead_id is not None
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Informe o nome do visitante.")
+        return value
+
+    def validate(self, attrs):
+        if self.instance and "cell" in attrs and attrs["cell"] != self.instance.cell:
+            raise serializers.ValidationError({"cell_id": "Não é possível mover um visitante de célula."})
+        return attrs
+
+
+class MakeVisitorMemberInputSerializer(serializers.Serializer):
+    """Either an existing person (person_id) or the e-mail to register the
+    visitor as a new person (name and phone come from the visitor)."""
+
+    person_id = serializers.PrimaryKeyRelatedField(queryset=Person.objects.all(), required=False)
+    email = serializers.EmailField(required=False)
+
+    def validate(self, attrs):
+        if not attrs.get("person_id") and not attrs.get("email"):
+            raise serializers.ValidationError(
+                "Escolha uma pessoa já cadastrada ou informe o e-mail para cadastrar o visitante."
+            )
+        return attrs
 
 
 class CellMeetingSerializer(serializers.ModelSerializer):
@@ -371,6 +566,10 @@ class CellMeetingSerializer(serializers.ModelSerializer):
     attendees = PersonMiniSerializer(many=True, read_only=True)
     attendee_ids = serializers.PrimaryKeyRelatedField(
         source="attendees", queryset=Person.objects.all(), many=True, write_only=True, required=False
+    )
+    visitors = CellVisitorMiniSerializer(many=True, read_only=True)
+    visitor_ids = serializers.PrimaryKeyRelatedField(
+        source="visitors", queryset=CellVisitor.objects.all(), many=True, write_only=True, required=False
     )
     attendance_count = serializers.SerializerMethodField()
     created_by = PersonMiniSerializer(read_only=True)
@@ -384,9 +583,13 @@ class CellMeetingSerializer(serializers.ModelSerializer):
             "date",
             "held",
             "cancel_reason",
+            "topic",
             "notes",
+            "decisions_count",
             "attendees",
             "attendee_ids",
+            "visitors",
+            "visitor_ids",
             "visitors_count",
             "attendance_count",
             "created_by",
@@ -395,8 +598,8 @@ class CellMeetingSerializer(serializers.ModelSerializer):
         read_only_fields = ["cell"]
 
     def get_attendance_count(self, obj):
-        # Registered people present plus unregistered visitors.
-        return len(obj.attendees.all()) + obj.visitors_count
+        # Registered people present, named guests and guests counted by number.
+        return len(obj.attendees.all()) + len(obj.visitors.all()) + obj.visitors_count
 
     def validate(self, attrs):
         cell = attrs.get("cell") or self.instance.cell
@@ -423,7 +626,7 @@ class CellMeetingSerializer(serializers.ModelSerializer):
                     {"cancel_reason": "Informe por que o encontro não aconteceu."}
                 )
             # A meeting that didn't happen has no attendance.
-            attrs.update(cancel_reason=reason, attendees=[], visitors_count=0)
+            attrs.update(cancel_reason=reason, attendees=[], visitors=[], visitors_count=0, decisions_count=0)
             return attrs
 
         attrs["cancel_reason"] = ""
@@ -442,7 +645,13 @@ class CellMeetingSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"attendee_ids": "Só membros e líderes da célula podem ser marcados como presentes "
                                      f"(adicione-os à célula primeiro): {', '.join(outsiders)}. "
-                                     "Visitantes entram em visitors_count."}
+                                     "Visitantes entram em visitor_ids ou visitors_count."}
+                )
+        if "visitors" in attrs:
+            strangers = [v.name for v in attrs["visitors"] if v.cell_id != cell.pk]
+            if strangers:
+                raise serializers.ValidationError(
+                    {"visitor_ids": f"Estes visitantes são de outra célula: {', '.join(strangers)}."}
                 )
         return attrs
 

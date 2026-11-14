@@ -21,8 +21,8 @@ CATEGORIES = {
     },
     "events": {
         "label": "Eventos",
-        "description": "Inscrições confirmadas e lembretes na véspera.",
-        "kinds": {"event_registration", "event_tomorrow"},
+        "description": "Inscrições confirmadas, vagas da lista de espera e lembretes na véspera.",
+        "kinds": {"event_registration", "event_tomorrow", "event_waitlist_offer", "event_offer_expiring"},
     },
     "service": {
         "label": "Escalas e produção",

@@ -17,7 +17,8 @@ from apps.churches.models import Cell, CellLeadership, CellMeeting, CellVisitor
 from apps.courses import billing, course_report, waitlist
 from apps.courses.choices import EnrollmentPaymentStatus, EnrollmentStatus
 from apps.courses.models import CourseClass, Enrollment, WaitlistEntry
-from apps.payments.models import EventRegistration, PaymentStatus
+from apps.payments import waitlist as event_waitlist
+from apps.payments.models import EventRegistration, EventWaitlistEntry, PaymentStatus
 from apps.production.choices import EventStatus, RosterStatus
 from apps.production.models import EventRosterEntry
 
@@ -93,6 +94,40 @@ def offers_expiring(now=None):
                 "depois a vaga passa para o próximo da fila.",
                 link="/app/cursos",
                 dedupe_key=f"offer-expiring:{entry.pk}",
+            )
+        )
+    return sent
+
+
+def refresh_event_waitlists():
+    """Hands out places freed meanwhile at sold-out events (and drops expired offers)."""
+    from apps.production.models import Event
+
+    events = Event.objects.filter(pk__in=EventWaitlistEntry.objects.values("event_id"))
+    count = 0
+    for event in events:
+        event_waitlist.refresh(event)
+        count += 1
+    return count
+
+
+def event_offers_expiring(now=None):
+    """Places held at an event for someone in line who hasn't registered yet."""
+    now = now or timezone.now()
+    entries = EventWaitlistEntry.objects.filter(
+        offer_expires_at__gt=now, offer_expires_at__lte=now + DEADLINE_WINDOW
+    ).select_related("event")
+    sent = 0
+    for entry in entries:
+        sent += len(
+            notify(
+                entry.person_id,
+                "event_offer_expiring",
+                f"Sua vaga reservada vence em breve: {entry.event.title}",
+                body=f"Faça a inscrição até {when_text(entry.offer_expires_at)}; "
+                "depois a vaga passa para o próximo da fila.",
+                link=f"/app/eventos/{entry.event_id}",
+                dedupe_key=f"event-offer-expiring:{entry.pk}",
             )
         )
     return sent
@@ -286,6 +321,12 @@ def classes_to_care(today=None):
     return sent
 
 
-HOURLY = [refresh_waitlists, reservations_expiring, offers_expiring]
+HOURLY = [
+    refresh_waitlists,
+    reservations_expiring,
+    offers_expiring,
+    refresh_event_waitlists,
+    event_offers_expiring,
+]
 DAILY = [meetings_not_registered, events_tomorrow, roster_tomorrow, roster_unanswered, clean_up]
 WEEKLY = [cells_to_care, classes_to_care]

@@ -5,6 +5,7 @@ from .models import (
     ActivityCompletion,
     Campus,
     CampusCellsLeadership,
+    CampusJoinRequest,
     CampusLeadership,
     Cell,
     CellGeneralLeadership,
@@ -39,6 +40,14 @@ class CampusAdmin(admin.ModelAdmin):
     list_filter = ["church"]
     search_fields = ["name", "city"]
     inlines = [CampusLeadershipInline]
+
+
+@admin.register(CampusJoinRequest)
+class CampusJoinRequestAdmin(admin.ModelAdmin):
+    list_display = ["person", "campus", "status", "created_at", "decided_by"]
+    list_filter = ["status", "campus"]
+    autocomplete_fields = ["person", "campus"]
+    readonly_fields = ["decided_at", "decided_by"]
 
 
 @admin.register(CampusLeadership)

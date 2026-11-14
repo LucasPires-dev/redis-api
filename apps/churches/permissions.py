@@ -83,9 +83,22 @@ def scope_ministries(qs, person):
     return qs.filter(condition).distinct()
 
 
+def is_linked(person) -> bool:
+    """Whether the person belongs to a campus (or runs the church). Self-registered
+    accounts start unlinked and must not see the church's internal data."""
+    return bool(person.is_authenticated and (person.is_manager or person.campus_id))
+
+
 class IsManager(BasePermission):
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.is_manager)
+
+
+class IsLinked(BasePermission):
+    message = "Seu cadastro ainda não está vinculado a um campus."
+
+    def has_permission(self, request, view):
+        return is_linked(request.user)
 
 
 class MinistryPermission(BasePermission):

@@ -1,9 +1,19 @@
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Sum
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
-from apps.churches.choices import MinistryKind
-from apps.churches.models import ActivityCompletion, Campus, Cell, Ministry, Team
+from apps.churches.choices import JoinRequestStatus, MinistryKind
+from apps.churches.membership import campus_for_invite
+from apps.churches.models import (
+    ActivityCompletion,
+    Campus,
+    CampusJoinRequest,
+    Cell,
+    Ministry,
+    Team,
+)
 from apps.churches.permissions import (
     general_led_kinds,
     is_cells_general_leader,
@@ -156,6 +166,19 @@ class PersonSerializer(serializers.ModelSerializer):
             email_changed = "email" in attrs and attrs["email"] != self.instance.email
             if email_changed or attrs.get("password"):
                 raise PermissionDenied("Apenas a própria pessoa pode alterar o e-mail e a senha.")
+        # Anyone can sign up, so the campus link must come from an invite or a
+        # leader's approval, never from editing one's own record.
+        if (
+            self.instance is not None
+            and request
+            and request.user.pk == self.instance.pk
+            and not request.user.is_manager
+            and "campus" in attrs
+            and attrs["campus"] != self.instance.campus
+        ):
+            raise PermissionDenied(
+                "Para entrar em um campus, use um convite ou peça vínculo à liderança."
+            )
         return attrs
 
     def create(self, validated_data):
@@ -182,6 +205,44 @@ class PersonSerializer(serializers.ModelSerializer):
             person.set_password(password)
             person.save(update_fields=["password"])
         return person
+
+
+class RegisterSerializer(serializers.Serializer):
+    """Public sign-up. Deliberately has no role, manager or campus field: the
+    account starts as a plain unlinked member. An optional invite code links it
+    to that campus right away."""
+
+    name = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    invite_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
+    def validate_email(self, value):
+        value = Person.objects.normalize_email(value)
+        if Person.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Já existe uma conta com este e-mail.")
+        return value
+
+    def validate_invite_code(self, value):
+        if not value.strip():
+            return None
+        campus = campus_for_invite(value)
+        if campus is None:
+            raise serializers.ValidationError("Código de convite inválido.")
+        return campus
+
+    def validate(self, attrs):
+        candidate = Person(email=attrs["email"], name=attrs["name"])
+        try:
+            validate_password(attrs["password"], user=candidate)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
+        return attrs
+
+    def create(self, validated_data):
+        campus = validated_data.pop("invite_code", None)
+        return Person.objects.create_user(campus=campus, **validated_data)
 
 
 class MeSerializer(serializers.ModelSerializer):
@@ -244,6 +305,9 @@ class MeSerializer(serializers.ModelSerializer):
     # Per-area flags that drive the tabs of each screen (see apps.people.capabilities).
     capabilities = serializers.SerializerMethodField()
 
+    # {id, campus, created_at} while a request to join a campus awaits an answer, else null.
+    pending_join_request = serializers.SerializerMethodField()
+
     class Meta:
         model = Person
         fields = [
@@ -254,6 +318,7 @@ class MeSerializer(serializers.ModelSerializer):
             "has_cpf",
             "campus",
             "church",
+            "pending_join_request",
             "baptized",
             "is_manager",
             "led_ministries",
@@ -335,3 +400,17 @@ class MeSerializer(serializers.ModelSerializer):
         from apps.people.capabilities import capabilities
 
         return capabilities(obj)
+
+    def get_pending_join_request(self, obj):
+        join_request = (
+            CampusJoinRequest.objects.select_related("campus")
+            .filter(person=obj, status=JoinRequestStatus.PENDING)
+            .first()
+        )
+        if join_request is None:
+            return None
+        return {
+            "id": str(join_request.id),
+            "campus": CampusMiniSerializer(join_request.campus).data,
+            "created_at": join_request.created_at,
+        }

@@ -47,6 +47,13 @@ class LeadershipRole(models.TextChoices):
     CO_LEADER = "co_leader", "Colíder"
 
 
+class JoinRequestStatus(models.TextChoices):
+    PENDING = "pending", "Pendente"
+    APPROVED = "approved", "Aprovado"
+    REJECTED = "rejected", "Recusado"
+    CANCELLED = "cancelled", "Cancelado"
+
+
 class CellRole(models.TextChoices):
     """Roles in a célula. Like LeadershipRole plus the leader in training
     ("Timóteo"), who is being prepared to lead the cell born from a

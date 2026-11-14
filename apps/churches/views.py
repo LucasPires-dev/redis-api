@@ -4,7 +4,7 @@ from django.db.models import Count, Max, Min, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter
@@ -19,13 +19,16 @@ from apps.production.permissions import can_assign_campus_event_producer
 from apps.reconciliation.models import ReconciliationLead
 
 from . import cell_health, cell_report, meeting_calendar
-from .choices import ActivityKind, CellRole, MinistryKind, VisitorStatus
+from .choices import ActivityKind, CellRole, JoinRequestStatus, MinistryKind, VisitorStatus
 from .filters import CellFilter, CellMeetingFilter
+from .membership import campus_for_invite, link_to_campus, new_invite_code
+from .throttles import CampusInviteThrottle
 from .models import (
     Activity,
     ActivityCompletion,
     Campus,
     CampusCellsLeadership,
+    CampusJoinRequest,
     CampusLeadership,
     Cell,
     CellGeneralLeadership,
@@ -48,6 +51,7 @@ from .permissions import (
     CellPermission,
     CellSupervisionVisitPermission,
     CellVisitorPermission,
+    IsLinked,
     MinistryPermission,
     SeasonPermission,
     TeamPermission,
@@ -56,10 +60,13 @@ from .permissions import (
     can_appoint_cell_trainee,
     can_supervise_cell,
     can_coordinate_campus_cells,
+    can_manage_campus,
     can_manage_cell,
     can_manage_ministry,
     can_manage_team,
     general_led_kinds,
+    is_linked,
+    led_campuses,
     scope_activities,
     scope_cell_meetings,
     scope_cells,
@@ -76,8 +83,10 @@ from .serializers import (
     ActivitySerializer,
     CampusCellsLeadershipSerializer,
     CampusCoursesLeadershipSerializer,
+    CampusJoinRequestSerializer,
     CampusLeadershipInputSerializer,
     CampusLeadershipSerializer,
+    CampusPublicSerializer,
     CampusSerializer,
     CellLeadershipInputSerializer,
     CellLeadershipSerializer,
@@ -160,7 +169,12 @@ class ChurchViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = Church.objects.all()
     serializer_class = ChurchSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # Unlinked accounts may list churches to pick one, nothing more.
+        if self.action in ("list", "retrieve"):
+            return [IsAuthenticated()]
+        return [IsLinked()]
 
     @action(detail=True, methods=["get"], url_path="people-search")
     def people_search(self, request, pk=None):
@@ -241,8 +255,44 @@ class CampusViewSet(viewsets.ReadOnlyModelViewSet):
     Church) — only its leadership is manageable through this API."""
 
     queryset = Campus.objects.select_related("church").prefetch_related("leaderships__person")
-    serializer_class = CampusSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve", "join"):
+            return [IsAuthenticated()]
+        return [IsLinked()]
+
+    def get_serializer_class(self):
+        # The full serializer lists the leaders with their emails.
+        return CampusSerializer if is_linked(self.request.user) else CampusPublicSerializer
+
+    @action(detail=False, methods=["post"], url_path="join", throttle_classes=[CampusInviteThrottle])
+    def join(self, request):
+        """{code} — join a campus through its invite: linked right away, as a member."""
+        campus = campus_for_invite(request.data.get("code"))
+        if campus is None:
+            raise ValidationError({"code": "Código de convite inválido."})
+        user = request.user
+        if user.campus_id and user.campus_id != campus.pk:
+            raise ValidationError({"code": "Você já está vinculado a outro campus."})
+        if user.campus_id is None:
+            link_to_campus(user, campus)
+        return Response(CampusPublicSerializer(campus).data)
+
+    @action(detail=True, methods=["get", "post", "delete"], url_path="invite")
+    def invite(self, request, pk=None):
+        """The campus invite code. GET reads it, POST creates or replaces it (the
+        old code stops working), DELETE turns invites off."""
+        campus = self.get_object()
+        if not can_manage_campus(request.user, campus):
+            raise PermissionDenied("Só a liderança do campus pode gerenciar o convite.")
+        if request.method == "POST":
+            campus.invite_code = new_invite_code()
+            campus.save(update_fields=["invite_code", "updated_at"])
+        elif request.method == "DELETE":
+            campus.invite_code = None
+            campus.save(update_fields=["invite_code", "updated_at"])
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"code": campus.invite_code})
 
     @action(detail=True, methods=["get", "post"], url_path="leaderships")
     def leaderships(self, request, pk=None):
@@ -406,7 +456,7 @@ class CampusViewSet(viewsets.ReadOnlyModelViewSet):
 
 class MinistryGeneralLeadershipViewSet(viewsets.ReadOnlyModelViewSet):
     """General leaders of each ministry kind (e.g. líder geral de Jovens), who manage
-    that ministry on every campus. Listing is open to anyone authenticated (the
+    that ministry on every campus. Listing is open to anyone linked to a campus (the
     frontend shows them on the ministry screens); choosing them is manager-only:
 
     POST   /api/ministry-general-leaderships/{kind}/leaders/              {person_id}
@@ -415,7 +465,7 @@ class MinistryGeneralLeadershipViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = MinistryGeneralLeadership.objects.prefetch_related("leaders").all()
     serializer_class = MinistryGeneralLeadershipSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsLinked]
 
     @staticmethod
     def _validate_kind(kind):
@@ -436,6 +486,83 @@ class MinistryGeneralLeadershipViewSet(viewsets.ReadOnlyModelViewSet):
         self._validate_kind(kind)
         _require_manager(request.user, "Só o gestor da mega igreja pode remover o líder geral de um ministério.")
         return _remove_general_leader(MinistryGeneralLeadership.objects.filter(kind=kind).first(), person_id)
+
+
+class CampusJoinRequestViewSet(
+    mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Requests to join a campus as a member.
+
+    POST {campus_id} by an account with no campus. The requester sees their own
+    requests and can cancel a pending one; the campus leadership (and the manager)
+    sees the campus's requests and approves or rejects them. Filters: ?status=, ?campus=.
+    """
+
+    serializer_class = CampusJoinRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = CampusJoinRequest.objects.select_related("campus__church", "person", "decided_by")
+        if not user.is_manager:
+            qs = qs.filter(Q(person=user) | Q(campus__in=led_campuses(user)))
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param)
+        campus_id = self.request.query_params.get("campus")
+        if campus_id:
+            qs = qs.filter(campus_id=campus_id)
+        return qs
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if user.campus_id:
+            raise ValidationError({"campus_id": "Você já está vinculado a um campus."})
+        if CampusJoinRequest.objects.filter(person=user, status=JoinRequestStatus.PENDING).exists():
+            raise ValidationError({"campus_id": "Você já tem um pedido de vínculo aguardando resposta."})
+        serializer.save(person=user)
+
+    def _pending(self):
+        join_request = self.get_object()
+        if join_request.status != JoinRequestStatus.PENDING:
+            raise ValidationError({"detail": "Este pedido já foi respondido."})
+        return join_request
+
+    def _decide(self, join_request, new_status):
+        join_request.status = new_status
+        join_request.decided_at = timezone.now()
+        join_request.decided_by = self.request.user
+        join_request.save(update_fields=["status", "decided_at", "decided_by"])
+        return Response(self.get_serializer(join_request).data)
+
+    def _require_campus_leadership(self, join_request):
+        if not can_manage_campus(self.request.user, join_request.campus):
+            raise PermissionDenied("Só a liderança do campus pode responder a este pedido.")
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        join_request = self._pending()
+        self._require_campus_leadership(join_request)
+        with transaction.atomic():
+            person = Person.objects.select_for_update().get(pk=join_request.person_id)
+            if person.campus_id:
+                raise ValidationError({"detail": "Esta pessoa já está vinculada a um campus."})
+            person.campus = join_request.campus
+            person.save(update_fields=["campus"])
+            return self._decide(join_request, JoinRequestStatus.APPROVED)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        join_request = self._pending()
+        self._require_campus_leadership(join_request)
+        return self._decide(join_request, JoinRequestStatus.REJECTED)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        join_request = self._pending()
+        if join_request.person_id != request.user.pk:
+            raise PermissionDenied("Só quem fez o pedido pode cancelá-lo.")
+        return self._decide(join_request, JoinRequestStatus.CANCELLED)
 
 
 class MinistryViewSet(viewsets.ModelViewSet):

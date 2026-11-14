@@ -2,32 +2,36 @@ import csv
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, serializers as drf_serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.people.cpf import apply_cpf
 
-from . import billing
+from . import billing, certificates, completion, course_report, tracks, waitlist
 from .choices import EnrollmentStatus
 from .models import (
     ClassExpense,
     Course,
     CourseClass,
     CourseClassTeacher,
+    CourseTrack,
     Enrollment,
     Lesson,
     LessonAttendance,
+    LessonMaterial,
 )
 from .permissions import (
     CourseClassPermission,
     CoursePermission,
     LessonPermission,
+    can_coordinate_courses,
     can_manage_class,
     can_manage_class_finances,
     scope_classes,
@@ -37,14 +41,17 @@ from .serializers import (
     BulkAttendanceInputSerializer,
     CancelEnrollmentInputSerializer,
     ChargeInputSerializer,
+    CompleteClassInputSerializer,
     ClassExpenseSerializer,
     CourseClassSerializer,
     CourseSerializer,
+    CourseTrackSerializer,
     EnrollInputSerializer,
     EnrollmentFinanceSerializer,
     EnrollmentInputSerializer,
     EnrollmentSerializer,
     LessonAttendanceSerializer,
+    LessonMaterialSerializer,
     LessonSerializer,
     ManualPaymentInputSerializer,
     MaterialInputSerializer,
@@ -54,6 +61,7 @@ from .serializers import (
     ScholarshipInputSerializer,
     TeacherInputSerializer,
     TeacherSerializer,
+    WaitlistEntrySerializer,
 )
 
 Person = get_user_model()
@@ -172,9 +180,7 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         (e.g. completed) — teachers may do that too."""
         course_class = self.get_object()
         if request.method == "GET":
-            billing.expire_overdue(course_class.enrollments.all())
-            enrollments = course_class.enrollments.select_related("person")
-            return Response(EnrollmentSerializer(enrollments, many=True).data)
+            return self._roster(course_class)
 
         if not can_manage_class(request.user, course_class):
             raise PermissionDenied()
@@ -194,11 +200,15 @@ class CourseClassViewSet(viewsets.ModelViewSet):
                 existing.status = new_status
                 existing.completed_at = timezone.now() if new_status == EnrollmentStatus.COMPLETED else None
                 existing.save(update_fields=["status", "completed_at", "updated_at"])
+                if new_status == EnrollmentStatus.COMPLETED:
+                    certificates.ensure_code(existing)
             return Response(EnrollmentSerializer(existing).data, status=status.HTTP_200_OK)
 
         # A paid enrollment is a financial act: only the coordinators.
         if course_class.is_paid and not can_manage_class_finances(request.user, course_class):
             raise PermissionDenied("Só a coordenação do curso matricula em turmas pagas.")
+        if not data["override_prerequisites"]:
+            tracks.check_prerequisites(course_class, person)
         apply_cpf(person, data.get("cpf", ""))
         enrollment = _billing(
             billing.enroll,
@@ -210,6 +220,49 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             send_charge=data["send_charge"],
         )
         return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
+
+    def _roster(self, course_class):
+        """The class's enrollments with each student's attendance."""
+        billing.expire_overdue(course_class.enrollments.all())
+        enrollments = course_class.enrollments.select_related("person")
+        context = {"attendance": completion.attendance_by_person(course_class)}
+        return Response(EnrollmentSerializer(enrollments, many=True, context=context).data)
+
+    @action(detail=True, methods=["post"])
+    def complete(self, request, pk=None):
+        """Closes the class for the given students: their enrollments become
+        completed. Teachers may do it too (as with any status change)."""
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        ser = CompleteClassInputSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        completion.complete(course_class, ser.validated_data["person_ids"])
+        return self._roster(course_class)
+
+    @action(detail=True, methods=["get"])
+    def care(self, request, pk=None):
+        """Active students who need attention (absences in a row, below the
+        minimum) — for whoever manages the class, teachers included."""
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        return Response(course_report.students_to_care(course_class))
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def report(self, request):
+        """Coordination report: one row per class of the campuses the person
+        coordinates. ?campus=<id> and ?state=upcoming|ongoing|finished filter it."""
+        if not course_report.can_see_reports(request.user):
+            raise PermissionDenied("Só a coordenação de cursos vê os relatórios.")
+        state = request.query_params.get("state") or None
+        if state and state not in ("upcoming", "ongoing", "finished"):
+            raise drf_serializers.ValidationError({"state": "Situação inválida."})
+        return Response(
+            course_report.build_report(
+                request.user, campus_id=request.query_params.get("campus") or None, state=state
+            )
+        )
 
     @action(detail=True, methods=["delete"], url_path=r"enrollments/(?P<person_id>[^/.]+)")
     def remove_enrollment(self, request, pk=None, person_id=None):
@@ -301,17 +354,23 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             qs = qs.filter(course__church_id=church_id)
         return Response(OpenClassSerializer(qs, many=True, context={"request": request}).data)
 
-    @action(detail=True, methods=["post"], url_path="enroll", permission_classes=[IsAuthenticated])
-    def enroll(self, request, pk=None):
-        """A member enrolls themselves in an open class."""
+    def _open_class(self, request, pk):
+        """An open class of the person's church (for members acting on their own)."""
         course_class = get_object_or_404(
             CourseClass.objects.filter(billing.open_classes_filter()), pk=pk
         )
         church_id = getattr(request.user.campus, "church_id", None)
         if church_id and course_class.course.church_id != church_id:
             raise PermissionDenied()
+        return course_class
+
+    @action(detail=True, methods=["post"], url_path="enroll", permission_classes=[IsAuthenticated])
+    def enroll(self, request, pk=None):
+        """A member enrolls themselves in an open class."""
+        course_class = self._open_class(request, pk)
         ser = EnrollInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        tracks.check_prerequisites(course_class, request.user)
         apply_cpf(request.user, ser.validated_data.get("cpf", ""))
         enrollment = _billing(
             billing.enroll,
@@ -325,6 +384,39 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             MyEnrollmentSerializer(enrollment, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+    # ── Waitlist ────────────────────────────────────────────────────────
+
+    @action(detail=True, methods=["post", "delete"], url_path="waitlist", permission_classes=[IsAuthenticated])
+    def own_waitlist(self, request, pk=None):
+        """POST: a member joins the line of a full open class. DELETE: leaves it
+        (or gives up the seat held for them)."""
+        if request.method == "DELETE":
+            course_class = get_object_or_404(CourseClass, pk=pk)
+            waitlist.leave(course_class, request.user)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        course_class = self._open_class(request, pk)
+        tracks.check_prerequisites(course_class, request.user)
+        entry = waitlist.join(course_class, request.user)
+        return Response(waitlist.status_of(entry), status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="waitlist-entries")
+    def waitlist_entries(self, request, pk=None):
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        billing.seats_left(course_class)  # hands out / expires offers first
+        entries = course_class.waitlist.select_related("person", "course_class")
+        return Response(WaitlistEntrySerializer(entries, many=True).data)
+
+    @action(detail=True, methods=["delete"], url_path=r"waitlist-entries/(?P<entry_id>[^/.]+)")
+    def remove_waitlist_entry(self, request, pk=None, entry_id=None):
+        course_class = self.get_object()
+        if not can_manage_class(request.user, course_class):
+            raise PermissionDenied()
+        get_object_or_404(course_class.waitlist, pk=entry_id).delete()
+        waitlist.refresh(course_class)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     # ── People search (for enrollment/teacher pickers) ──────────────────
 
@@ -445,6 +537,24 @@ class EnrollmentViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewse
         )
         return self._respond(enrollment)
 
+    @action(detail=True, methods=["get"])
+    def certificate(self, request, pk=None):
+        """The completion certificate (PDF): the student, and whoever manages the class."""
+        enrollment = self.get_object()
+        if enrollment.person_id != request.user.pk and not can_manage_class(
+            request.user, enrollment.course_class
+        ):
+            raise PermissionDenied()
+        if enrollment.status != EnrollmentStatus.COMPLETED:
+            raise drf_serializers.ValidationError(
+                {"detail": "O certificado fica disponível quando o curso é concluído."}
+            )
+        certificates.ensure_code(enrollment)
+        pdf = certificates.build_pdf(enrollment, origin=request.headers.get("Origin", ""))
+        response = HttpResponse(pdf, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{certificates.filename(enrollment)}"'
+        return response
+
     @action(detail=True, methods=["post"])
     def material(self, request, pk=None):
         """Marks the class material as delivered (or not) — teachers too."""
@@ -461,6 +571,49 @@ class EnrollmentViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewse
             enrollment.material_delivered_by = None
         enrollment.save(update_fields=["material_delivered_at", "material_delivered_by", "updated_at"])
         return Response(EnrollmentSerializer(enrollment).data)
+
+
+class CourseTrackViewSet(viewsets.ModelViewSet):
+    """Growth tracks of the person's church: everyone reads them (with their
+    own progress); the church-wide coordination keeps them."""
+
+    serializer_class = CourseTrackSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        church = tracks.church_of(self.request.user)
+        qs = CourseTrack.objects.prefetch_related("steps__course")
+        return qs.filter(church=church) if church else qs.none()
+
+    def _require_coordination(self):
+        if not can_coordinate_courses(self.request.user):
+            raise PermissionDenied("Só a coordenação geral de cursos mantém as trilhas.")
+
+    def perform_create(self, serializer):
+        self._require_coordination()
+        serializer.save(church=tracks.church_of(self.request.user), created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._require_coordination()
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._require_coordination()
+        instance.delete()
+
+
+class CertificateVerifyView(APIView):
+    """Public: confirms a certificate by its code (no login), showing who
+    completed which course — never contact data."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request, code):
+        enrollment = certificates.find_valid(code)
+        if enrollment is None:
+            raise Http404
+        return Response(certificates.public_data(enrollment))
 
 
 class ClassExpenseViewSet(viewsets.ModelViewSet):
@@ -499,7 +652,7 @@ class LessonViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Only lessons of classes the person can see (coordinators, teachers).
         visible = scope_classes(CourseClass.objects.all(), self.request.user)
-        qs = Lesson.objects.select_related("course_class").prefetch_related("attendances").filter(
+        qs = Lesson.objects.select_related("course_class").prefetch_related("attendances", "materials").filter(
             course_class__in=visible
         )
         class_id = self.request.query_params.get("course_class_id")
@@ -509,6 +662,27 @@ class LessonViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save()
+
+    # ── Materials ───────────────────────────────────────────────────────
+
+    @action(detail=True, methods=["post"], url_path="materials")
+    def materials(self, request, pk=None):
+        """Adds a link to the lesson (teachers and coordination)."""
+        lesson = self.get_object()
+        if not can_manage_class(request.user, lesson.course_class):
+            raise PermissionDenied()
+        ser = LessonMaterialSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        material = ser.save(lesson=lesson, created_by=request.user)
+        return Response(LessonMaterialSerializer(material).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["delete"], url_path=r"materials/(?P<material_id>[^/.]+)")
+    def remove_material(self, request, pk=None, material_id=None):
+        lesson = self.get_object()
+        if not can_manage_class(request.user, lesson.course_class):
+            raise PermissionDenied()
+        get_object_or_404(LessonMaterial, pk=material_id, lesson=lesson).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     # ── Attendance ──────────────────────────────────────────────────────
 

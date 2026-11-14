@@ -150,6 +150,8 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Public sign-up and invite codes are guessable/abusable without a limit.
+    "DEFAULT_THROTTLE_RATES": {"register": "10/hour", "campus_invite": "30/hour"},
 }
 
 SIMPLE_JWT = {

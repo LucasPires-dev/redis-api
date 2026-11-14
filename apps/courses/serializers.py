@@ -5,7 +5,7 @@ from rest_framework import serializers
 from apps.churches.serializers import CampusMiniSerializer
 from apps.people.cpf import CpfField
 
-from . import billing
+from . import billing, certificates, completion, tracks, waitlist
 from .choices import SEAT_HOLDING_PAYMENT_STATUSES, EnrollmentStatus, TeacherRole
 from .models import (
     ClassExpense,
@@ -13,16 +13,21 @@ from .models import (
     Course,
     CourseClass,
     CourseClassTeacher,
+    CourseTrack,
+    CourseTrackStep,
     Enrollment,
     EnrollmentItem,
     EnrollmentPayment,
     Lesson,
     LessonAttendance,
+    LessonMaterial,
+    WaitlistEntry,
 )
 from .permissions import (
     can_coordinate_campus_courses,
     can_manage_class,
     can_manage_class_finances,
+    can_coordinate_courses,
     can_manage_course,
     coordinated_course_campuses,
 )
@@ -39,9 +44,20 @@ class PersonMiniSerializer(serializers.ModelSerializer):
 # ── Course ──────────────────────────────────────────────────────────────────
 
 
+class CourseMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Course
+        fields = ["id", "name"]
+
+
 class CourseSerializer(serializers.ModelSerializer):
     campus = CampusMiniSerializer(read_only=True)
     campus_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    # Courses to complete first; replaced as a whole on write.
+    prerequisites = CourseMiniSerializer(many=True, read_only=True)
+    prerequisite_ids = serializers.ListField(
+        child=serializers.UUIDField(), write_only=True, required=False, max_length=20
+    )
     class_count = serializers.SerializerMethodField()
     total_enrolled = serializers.SerializerMethodField()
     # Edit/delete the course (can_manage_course).
@@ -53,10 +69,42 @@ class CourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = [
-            "id", "name", "description", "campus", "campus_id",
+            "id", "name", "description", "campus", "campus_id", "prerequisites", "prerequisite_ids",
             "class_count", "total_enrolled", "can_manage", "can_add_class", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate_prerequisite_ids(self, ids):
+        ids = list(dict.fromkeys(ids))
+        courses = list(Course.objects.filter(pk__in=ids).prefetch_related("prerequisites"))
+        if len(courses) != len(ids):
+            raise serializers.ValidationError("Curso inválido.")
+        user = self._user()
+        church_id = self.instance.church_id if self.instance else getattr(tracks.church_of(user), "id", None)
+        if any(c.church_id != church_id for c in courses):
+            raise serializers.ValidationError("Os pré-requisitos precisam ser cursos da mesma igreja.")
+        if self.instance:
+            if any(c.pk == self.instance.pk for c in courses):
+                raise serializers.ValidationError("Um curso não pode ser pré-requisito dele mesmo.")
+            if tracks.creates_cycle(self.instance, courses):
+                raise serializers.ValidationError(
+                    "Isso criaria um ciclo: um dos cursos escolhidos já exige este."
+                )
+        return courses
+
+    def create(self, validated_data):
+        prerequisites = validated_data.pop("prerequisite_ids", None)
+        course = super().create(validated_data)
+        if prerequisites is not None:
+            course.prerequisites.set(prerequisites)
+        return course
+
+    def update(self, instance, validated_data):
+        prerequisites = validated_data.pop("prerequisite_ids", None)
+        course = super().update(instance, validated_data)
+        if prerequisites is not None:
+            course.prerequisites.set(prerequisites)
+        return course
 
     def get_class_count(self, obj):
         return obj.classes.count()
@@ -132,12 +180,14 @@ class CourseClassSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source="course.name", read_only=True)
     teachers = TeacherSerializer(many=True, read_only=True)
     enrolled_count = serializers.SerializerMethodField()
+    completed_count = serializers.SerializerMethodField()
     lesson_count = serializers.SerializerMethodField()
     # Replaced as a whole on write: items sent with an id are updated, without
     # one created, and missing ones removed (enrollments keep their copies).
     fee_items = ClassFeeItemSerializer(many=True, required=False)
     base_price_cents = serializers.IntegerField(read_only=True)
     seats_left = serializers.SerializerMethodField()
+    waitlist_count = serializers.SerializerMethodField()
     can_manage = serializers.SerializerMethodField()
     can_manage_finances = serializers.SerializerMethodField()
 
@@ -146,10 +196,10 @@ class CourseClassSerializer(serializers.ModelSerializer):
         fields = [
             "id", "course_id", "course_name", "campus", "campus_id",
             "name", "weekday", "start_time", "start_date", "end_date",
-            "description", "teachers", "enrolled_count", "lesson_count",
-            "self_enrollment", "max_capacity", "enrollment_deadline", "reservation_days",
+            "description", "teachers", "enrolled_count", "completed_count", "lesson_count",
+            "min_attendance_percent", "self_enrollment", "max_capacity", "enrollment_deadline", "reservation_days",
             "max_installments", "refund_before_start", "fee_items", "base_price_cents",
-            "seats_left", "can_manage", "can_manage_finances",
+            "seats_left", "waitlist_count", "can_manage", "can_manage_finances",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
@@ -157,11 +207,17 @@ class CourseClassSerializer(serializers.ModelSerializer):
     def get_enrolled_count(self, obj):
         return billing.active_enrollments(obj).count()
 
+    def get_completed_count(self, obj):
+        return billing.active_enrollments(obj).filter(status=EnrollmentStatus.COMPLETED).count()
+
     def get_lesson_count(self, obj):
         return obj.lessons.count()
 
     def get_seats_left(self, obj):
         return billing.seats_left(obj)
+
+    def get_waitlist_count(self, obj):
+        return obj.waitlist.count()
 
     def _user(self):
         request = self.context.get("request")
@@ -249,8 +305,14 @@ class OpenClassSerializer(serializers.ModelSerializer):
     campus = CampusMiniSerializer(read_only=True)
     fee_items = ClassFeeItemSerializer(many=True, read_only=True)
     base_price_cents = serializers.IntegerField(read_only=True)
+    # For the person asking: a seat held for them on the waitlist counts as free.
     seats_left = serializers.SerializerMethodField()
     my_enrollment = serializers.SerializerMethodField()
+    # {position, offer_expires_at, joined_at} while the person is on the waitlist.
+    my_waitlist = serializers.SerializerMethodField()
+    prerequisites = serializers.SerializerMethodField()
+    # Prerequisite courses the person hasn't completed: they can't enroll yet.
+    missing_prerequisites = serializers.SerializerMethodField()
 
     class Meta:
         model = CourseClass
@@ -258,11 +320,31 @@ class OpenClassSerializer(serializers.ModelSerializer):
             "id", "course_name", "course_description", "campus", "name", "description",
             "weekday", "start_time", "start_date", "end_date", "max_capacity",
             "enrollment_deadline", "reservation_days", "max_installments", "refund_before_start",
-            "fee_items", "base_price_cents", "seats_left", "my_enrollment",
+            "fee_items", "base_price_cents", "seats_left", "my_enrollment", "my_waitlist",
+            "prerequisites", "missing_prerequisites",
         ]
 
+    def get_prerequisites(self, obj):
+        return CourseMiniSerializer(obj.course.prerequisites.all().order_by("name"), many=True).data
+
+    def get_missing_prerequisites(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return []
+        if "completed_courses" not in self.context:
+            self.context["completed_courses"] = tracks.completed_course_ids(request.user)
+        missing = tracks.missing_prerequisites(obj.course, request.user, self.context["completed_courses"])
+        return CourseMiniSerializer(missing, many=True).data
+
     def get_seats_left(self, obj):
-        return billing.seats_left(obj)
+        request = self.context.get("request")
+        return billing.seats_left(obj, for_person=request.user if request else None)
+
+    def get_my_waitlist(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return None
+        return waitlist.status_of(waitlist.entry_of(obj, request.user))
 
     def get_my_enrollment(self, obj):
         request = self.context.get("request")
@@ -297,13 +379,40 @@ class EnrollmentSerializer(serializers.ModelSerializer):
 
     person = PersonMiniSerializer(read_only=True)
     payment_status_display = serializers.CharField(source="get_payment_status_display", read_only=True)
+    # {present, counted, percent} — when the view passes the class's attendance
+    # in the context ("attendance"); otherwise null.
+    attendance = serializers.SerializerMethodField()
+    meets_attendance = serializers.SerializerMethodField()
+    # "ABCD-EFGH-JKLM" while completed; null otherwise.
+    certificate_code = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
         fields = [
             "id", "person", "status", "enrolled_at", "completed_at",
             "payment_status", "payment_status_display", "material_delivered_at",
+            "attendance", "meets_attendance", "certificate_code",
         ]
+
+    def get_certificate_code(self, obj):
+        if obj.status != EnrollmentStatus.COMPLETED or not obj.certificate_code:
+            return None
+        return certificates.display_code(obj.certificate_code)
+
+    def _attendance(self, obj):
+        by_person = self.context.get("attendance")
+        if by_person is None:
+            return None
+        return by_person.get(obj.person_id, completion.EMPTY_SUMMARY)
+
+    def get_attendance(self, obj):
+        return self._attendance(obj)
+
+    def get_meets_attendance(self, obj):
+        attendance = self._attendance(obj)
+        if attendance is None:
+            return None
+        return completion.meets_criterion(obj.course_class, attendance)
 
 
 class EnrollmentFinanceSerializer(EnrollmentSerializer):
@@ -333,6 +442,22 @@ class MyEnrollmentSerializer(EnrollmentFinanceSerializer):
     class Meta(EnrollmentFinanceSerializer.Meta):
         fields = EnrollmentFinanceSerializer.Meta.fields + ["course_class", "can_cancel"]
 
+    def _attendance(self, obj):
+        if not hasattr(obj, "_attendance_cache"):
+            history = completion.lesson_history(obj)
+            taken = [lesson["present"] for lesson in history if lesson["present"] is not None]
+            obj._attendance_cache = {
+                **completion.summary(sum(1 for p in taken if p), len(taken)),
+                "lessons": history,
+            }
+        return obj._attendance_cache
+
+    def get_attendance(self, obj):
+        return self._attendance(obj)
+
+    def get_meets_attendance(self, obj):
+        return completion.meets_criterion(obj.course_class, self._attendance(obj))
+
     def get_course_class(self, obj):
         cc = obj.course_class
         return {
@@ -346,6 +471,7 @@ class MyEnrollmentSerializer(EnrollmentFinanceSerializer):
             "start_date": cc.start_date,
             "end_date": cc.end_date,
             "max_installments": cc.max_installments,
+            "min_attendance_percent": cc.min_attendance_percent,
         }
 
     def get_can_cancel(self, obj):
@@ -377,6 +503,8 @@ class EnrollmentInputSerializer(EnrollInputSerializer):
     # Create the online payment link now; otherwise the enrollment waits for a
     # payment in person (or a link generated later).
     send_charge = serializers.BooleanField(default=False)
+    # Enroll even without the course's prerequisites (a coordinator's call).
+    override_prerequisites = serializers.BooleanField(default=False)
 
 
 class ScholarshipInputSerializer(serializers.Serializer):
@@ -406,6 +534,12 @@ class MaterialInputSerializer(serializers.Serializer):
     delivered = serializers.BooleanField()
 
 
+class CompleteClassInputSerializer(serializers.Serializer):
+    """The students to mark as completed (the screen pre-selects who meets the criterion)."""
+
+    person_ids = serializers.ListField(child=serializers.UUIDField(), min_length=1)
+
+
 class ClassExpenseSerializer(serializers.ModelSerializer):
     course_class_id = serializers.PrimaryKeyRelatedField(
         source="course_class", queryset=CourseClass.objects.all(), write_only=True
@@ -423,19 +557,115 @@ class ClassExpenseSerializer(serializers.ModelSerializer):
         return attrs
 
 
+# ── Tracks ──────────────────────────────────────────────────────────────────
+
+
+class CourseTrackSerializer(serializers.ModelSerializer):
+    """A track with its courses in order. `course_ids` (write) replaces the
+    steps as a whole, in the order given. `my_progress`: where the person
+    reading stands in it."""
+
+    steps = serializers.SerializerMethodField()
+    course_ids = serializers.ListField(
+        child=serializers.UUIDField(), write_only=True, min_length=1, max_length=30
+    )
+    can_manage = serializers.SerializerMethodField()
+    my_progress = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CourseTrack
+        fields = ["id", "name", "description", "steps", "course_ids", "can_manage", "my_progress"]
+        read_only_fields = ["id"]
+
+    def _user(self):
+        request = self.context.get("request")
+        return request.user if request else None
+
+    def get_steps(self, obj):
+        return [
+            {"id": str(s.id), "order": s.order, "course": {"id": str(s.course_id), "name": s.course.name}}
+            for s in obj.steps.select_related("course").order_by("order")
+        ]
+
+    def get_can_manage(self, obj):
+        user = self._user()
+        return bool(user) and can_coordinate_courses(user)
+
+    def get_my_progress(self, obj):
+        user = self._user()
+        return tracks.track_progress(obj, user) if user else None
+
+    def validate_course_ids(self, ids):
+        if len(set(ids)) != len(ids):
+            raise serializers.ValidationError("Um curso aparece mais de uma vez na trilha.")
+        courses = {c.pk: c for c in Course.objects.filter(pk__in=ids)}
+        if len(courses) != len(ids):
+            raise serializers.ValidationError("Curso inválido.")
+        church_id = self.instance.church_id if self.instance else getattr(tracks.church_of(self._user()), "id", None)
+        if any(c.church_id != church_id for c in courses.values()):
+            raise serializers.ValidationError("A trilha só pode ter cursos desta igreja.")
+        return [courses[i] for i in ids]
+
+    def validate_name(self, value):
+        value = value.strip()
+        church_id = self.instance.church_id if self.instance else getattr(tracks.church_of(self._user()), "id", None)
+        clash = CourseTrack.objects.filter(church_id=church_id, name__iexact=value)
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("Já existe uma trilha com esse nome.")
+        return value
+
+    def _set_steps(self, track, courses):
+        track.steps.all().delete()
+        CourseTrackStep.objects.bulk_create(
+            CourseTrackStep(track=track, course=course, order=index)
+            for index, course in enumerate(courses, start=1)
+        )
+
+    @transaction.atomic
+    def create(self, validated_data):
+        courses = validated_data.pop("course_ids")
+        track = super().create(validated_data)
+        self._set_steps(track, courses)
+        return track
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        courses = validated_data.pop("course_ids", None)
+        track = super().update(instance, validated_data)
+        if courses is not None:
+            self._set_steps(track, courses)
+        return track
+
+
 # ── Lesson ──────────────────────────────────────────────────────────────────
+
+
+class LessonMaterialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LessonMaterial
+        fields = ["id", "title", "url", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+    def validate_title(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Dê um nome ao material.")
+        return value
 
 
 class LessonSerializer(serializers.ModelSerializer):
     course_class_id = serializers.UUIDField(write_only=True)
     attendance_count = serializers.SerializerMethodField()
     total_enrolled = serializers.SerializerMethodField()
+    materials = LessonMaterialSerializer(many=True, read_only=True)
 
     class Meta:
         model = Lesson
         fields = [
             "id", "course_class_id", "order", "title", "date", "notes",
-            "attendance_count", "total_enrolled", "created_at",
+            "attendance_count", "total_enrolled", "materials", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -443,7 +673,24 @@ class LessonSerializer(serializers.ModelSerializer):
         return obj.attendances.filter(present=True).count()
 
     def get_total_enrolled(self, obj):
-        return obj.course_class.enrollments.filter(status=EnrollmentStatus.ACTIVE).count()
+        return billing.active_enrollments(obj.course_class).count()
+
+
+# ── Waitlist ────────────────────────────────────────────────────────────────
+
+
+class WaitlistEntrySerializer(serializers.ModelSerializer):
+    """The class's line, for its teachers and coordination."""
+
+    person = PersonMiniSerializer(read_only=True)
+    position = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WaitlistEntry
+        fields = ["id", "person", "position", "offer_expires_at", "created_at"]
+
+    def get_position(self, obj):
+        return waitlist.position(obj)
 
 
 # ── Attendance ──────────────────────────────────────────────────────────────

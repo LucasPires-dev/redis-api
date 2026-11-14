@@ -8,7 +8,7 @@ Each returns how many reminders it raised, for logs and tests.
 
 from datetime import timedelta
 
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 
 from apps.churches import cell_health, meeting_calendar
@@ -195,6 +195,48 @@ def events_tomorrow(today=None):
     return sent
 
 
+def _born_today(today):
+    """People whose birthday is today (29/02 counts on 28/02 in common years)."""
+    from calendar import isleap
+
+    from django.db.models import Q
+
+    from apps.people.models import Person
+
+    days = Q(birth_date__month=today.month, birth_date__day=today.day)
+    if today.month == 2 and today.day == 28 and not isleap(today.year):
+        days |= Q(birth_date__month=2, birth_date__day=29)
+    return Person.objects.filter(days, is_active=True)
+
+
+def birthdays_today(now=None):
+    """Tells the leaders and co-leaders of each active cell whose member (or
+    leader) has a birthday today. Once a year per person and leader."""
+    today = timezone.localdate(now or timezone.now())
+    sent = 0
+    for person in _born_today(today):
+        cells = Cell.objects.active(today).filter(Q(members=person) | Q(leaderships__person=person)).distinct()
+        leaders = set(
+            CellLeadership.objects.filter(
+                cell__in=cells, role__in=[CellRole.LEADER, CellRole.CO_LEADER]
+            ).exclude(person=person).values_list("person_id", flat=True)
+        )
+        if not leaders:
+            continue
+        first = cells.first()
+        sent += len(
+            notify(
+                list(leaders),
+                "birthday",
+                f"Hoje é aniversário de {person.name}",
+                body="Que tal mandar uma mensagem?",
+                link=f"/app/celulas/{first.pk}" if first else "",
+                dedupe_key=f"birthday:{person.pk}:{today.year}",
+            )
+        )
+    return sent
+
+
 # How long a registration may wait for its payment before the reminder.
 PAYMENT_GRACE = timedelta(days=1)
 
@@ -360,6 +402,7 @@ HOURLY = [
 ]
 DAILY = [
     meetings_not_registered,
+    birthdays_today,
     events_tomorrow,
     event_payments_pending,
     roster_tomorrow,

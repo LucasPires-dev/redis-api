@@ -1,6 +1,7 @@
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
@@ -207,6 +208,31 @@ class PersonSerializer(serializers.ModelSerializer):
         return person
 
 
+def check_birth_date(value):
+    if value is None:
+        return None
+    today = timezone.localdate()
+    if value > today or value.year < today.year - 120:
+        raise serializers.ValidationError("Data de nascimento inválida.")
+    return value
+
+
+class ProfileSerializer(serializers.ModelSerializer):
+    """What a person edits about themselves (PATCH /api/auth/me/)."""
+
+    class Meta:
+        model = Person
+        fields = ["name", "phone", "birth_date"]
+
+    def validate_name(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Informe o nome.")
+        return value.strip()
+
+    def validate_birth_date(self, value):
+        return check_birth_date(value)
+
+
 class RegisterSerializer(serializers.Serializer):
     """Public sign-up. Deliberately has no role, manager or campus field: the
     account starts as a plain unlinked member. An optional invite code links it
@@ -216,6 +242,7 @@ class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, style={"input_type": "password"})
     phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    birth_date = serializers.DateField(required=False, allow_null=True)
     invite_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     def validate_email(self, value):
@@ -231,6 +258,9 @@ class RegisterSerializer(serializers.Serializer):
         if campus is None:
             raise serializers.ValidationError("Código de convite inválido.")
         return campus
+
+    def validate_birth_date(self, value):
+        return check_birth_date(value)
 
     def validate(self, attrs):
         candidate = Person(email=attrs["email"], name=attrs["name"])
@@ -315,6 +345,7 @@ class MeSerializer(serializers.ModelSerializer):
             "name",
             "email",
             "phone",
+            "birth_date",
             "has_cpf",
             "campus",
             "church",

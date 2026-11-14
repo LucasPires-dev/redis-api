@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from .birthdays import BirthdaysView
 from .views import InviteLookupView, MeView, PersonViewSet, RegisterView
 
 router = DefaultRouter()
@@ -13,5 +14,6 @@ urlpatterns = [
     path("auth/me/", MeView.as_view(), name="me"),
     path("auth/register/", RegisterView.as_view(), name="register"),
     path("auth/invite/<str:code>/", InviteLookupView.as_view(), name="invite-lookup"),
+    path("birthdays/", BirthdaysView.as_view(), name="birthdays"),
     *router.urls,
 ]

@@ -16,6 +16,8 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.notifications import triggers
+
 from . import billing
 from .models import WaitlistEntry
 
@@ -47,6 +49,8 @@ def refresh(course_class):
         expires = now + timedelta(days=course_class.reservation_days)
         ids = list(waiting.values_list("id", flat=True)[:free])
         WaitlistEntry.objects.filter(id__in=ids).update(offer_expires_at=expires)
+        for entry in WaitlistEntry.objects.filter(id__in=ids).select_related("course_class__course"):
+            triggers.waitlist_offer(entry)
 
 
 def entry_of(course_class, person):

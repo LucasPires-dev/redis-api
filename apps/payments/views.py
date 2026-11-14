@@ -9,6 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.response import Response
 
+from apps.notifications import triggers
 from apps.people.cpf import apply_cpf, require_cpf
 from apps.production.models import Event
 from apps.production.permissions import can_manage_event, scope_events
@@ -136,6 +137,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
             registration.payment_status = PaymentStatus.CONFIRMED
             registration.paid_at = timezone.now()
             registration.save(update_fields=["payment_status", "paid_at"])
+            triggers.event_registration_confirmed(registration)
 
         broadcast_event_update(event.id, "registration")
 

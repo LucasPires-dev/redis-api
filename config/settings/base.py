@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "apps.production",
     "apps.courses",
     "apps.payments",
+    "apps.notifications",
 ]
 
 MIDDLEWARE = [
@@ -139,7 +140,42 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.reconciliation.tasks.sync_reconciliation_leads",
         "schedule": crontab(minute="*/15"),
     },
+    # Notifications (apps/notifications/reminders.py). Each reminder is sent once.
+    "notifications-hourly": {
+        "task": "apps.notifications.tasks.send_hourly_reminders",
+        "schedule": crontab(minute=5),
+    },
+    "notifications-daily": {
+        "task": "apps.notifications.tasks.send_daily_reminders",
+        "schedule": crontab(minute=0, hour=8),
+    },
+    "notifications-weekly": {
+        "task": "apps.notifications.tasks.send_weekly_reminders",
+        "schedule": crontab(minute=30, hour=8, day_of_week="mon"),
+    },
 }
+
+# The app's public address, for links that leave the app (emails, certificates).
+FRONTEND_URL = config("FRONTEND_URL", default="")
+
+# Email (notifications). Any SMTP provider works (Resend, Amazon SES, Google
+# Workspace...): set EMAIL_HOST and its credentials. Without EMAIL_HOST no
+# notification email is sent; the notification center works the same.
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = config("EMAIL_HOST", default="")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+EMAIL_TIMEOUT = 15
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="Redis <nao-responda@localhost>")
+# Push notifications (Web Push). Generate the pair once with
+# `manage.py generate_vapid_keys`; without them push stays off.
+VAPID_PUBLIC_KEY = config("VAPID_PUBLIC_KEY", default="")
+VAPID_PRIVATE_KEY = config("VAPID_PRIVATE_KEY", default="")
+VAPID_SUBJECT = config("VAPID_SUBJECT", default="mailto:nao-responda@localhost")
+NOTIFICATION_PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
+NOTIFICATION_EMAILS_ENABLED = config("NOTIFICATION_EMAILS_ENABLED", default=bool(EMAIL_HOST), cast=bool)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (

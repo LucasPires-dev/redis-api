@@ -85,6 +85,8 @@ class EventSerializer(serializers.ModelSerializer):
     ticket_config = serializers.SerializerMethodField()
     # Edit the event, its rundown, ticket and attendee list (can_manage_event).
     can_manage = serializers.SerializerMethodField()
+    # Check people in at the door: managers plus the confirmed roster.
+    can_check_in = serializers.SerializerMethodField()
 
     class Meta:
         model = Event
@@ -105,6 +107,7 @@ class EventSerializer(serializers.ModelSerializer):
             "ticket",
             "ticket_config",
             "can_manage",
+            "can_check_in",
             "created_at",
         ]
         read_only_fields = ["created_at"]
@@ -112,6 +115,12 @@ class EventSerializer(serializers.ModelSerializer):
     def get_can_manage(self, obj):
         request = self.context.get("request")
         return bool(request) and can_manage_event(request.user, obj)
+
+    def get_can_check_in(self, obj):
+        from apps.payments.checkin import can_check_in  # payments depends on production
+
+        request = self.context.get("request")
+        return bool(request) and can_check_in(request.user, obj)
 
     def get_ticket_config(self, obj):
         try:

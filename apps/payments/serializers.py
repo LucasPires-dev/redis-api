@@ -128,14 +128,43 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
             "amount_cents",
             "payment_url",
             "paid_at",
+            "ticket_code",
+            "checked_in_at",
             "created_at",
         ]
-        read_only_fields = ["payment_status", "amount_cents", "payment_url", "paid_at", "created_at"]
+        read_only_fields = [
+            "payment_status", "amount_cents", "payment_url", "paid_at", "ticket_code", "checked_in_at", "created_at",
+        ]
+
+
+class CheckinInputSerializer(serializers.Serializer):
+    """The ticket code (typed or read from the QR code) or, when found by name,
+    the registration id."""
+
+    event_id = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all(), source="event")
+    code = serializers.CharField(required=False, allow_blank=True, default="")
+    registration_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+
+    def validate(self, attrs):
+        if not attrs["code"].strip() and not attrs["registration_id"]:
+            raise serializers.ValidationError({"code": "Informe o código do ingresso."})
+        return attrs
+
+
+class CheckinRowSerializer(serializers.ModelSerializer):
+    """One line of the door list (no ticket code: it's the person's credential)."""
+
+    person = RegistrationPersonMiniSerializer(read_only=True)
+
+    class Meta:
+        model = EventRegistration
+        fields = ["id", "person", "payment_status", "checked_in_at"]
 
 
 class RegistrationStatsSerializer(serializers.Serializer):
     total = serializers.IntegerField()
     confirmed = serializers.IntegerField()
+    checked_in = serializers.IntegerField()
     pending = serializers.IntegerField()
     cancelled = serializers.IntegerField()
     capacity = serializers.IntegerField(allow_null=True)

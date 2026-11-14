@@ -15,7 +15,7 @@ from apps.reconciliation.models import Reconciliation
 
 from .models import Person
 from .permissions import PersonPermission
-from .serializers import MeSerializer, PersonSerializer, RegisterSerializer
+from .serializers import MeSerializer, PersonSerializer, ProfileSerializer, RegisterSerializer
 
 
 class PersonViewSet(viewsets.ModelViewSet):
@@ -87,6 +87,13 @@ class MeView(APIView):
 
     def get(self, request):
         # request.user is already the logged-in Person (Person is the AUTH_USER_MODEL).
+        return Response(MeSerializer(request.user).data)
+
+    def patch(self, request):
+        """The person's own name, phone and (optional) birth date."""
+        serializer = ProfileSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(MeSerializer(request.user).data)
 
 

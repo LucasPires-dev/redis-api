@@ -17,7 +17,7 @@ CATEGORIES = {
     "cells": {
         "label": "Células",
         "description": (
-            "Encontros para registrar, pessoas para cuidar, supervisão, visitantes e pedidos para participar."
+            "Encontros para registrar, pessoas para cuidar, aniversários, supervisão, visitantes e pedidos."
         ),
         "kinds": {
             "meeting_not_registered",
@@ -26,6 +26,7 @@ CATEGORIES = {
             "visitor_forwarded",
             "cell_join_request",
             "cell_join_answered",
+            "birthday",
         },
     },
     "events": {

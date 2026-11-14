@@ -43,6 +43,10 @@ class Person(AbstractBaseUser, PermissionsMixin):
     # the API (personal data); MeSerializer only says whether it is filled.
     cpf = models.CharField(max_length=11, blank=True, default="")
 
+    # Optional, never required. Leaders see only the day and month (the
+    # birthdays of the month), never the year.
+    birth_date = models.DateField(null=True, blank=True)
+
     # --- Church membership ---------------------------------------------------
 
     # The campus the person attends. Optional: someone can be registered before

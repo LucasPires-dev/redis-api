@@ -1,4 +1,7 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
+
+from .public import explore_view, public_cell_view, public_class_view
 
 from .views import (
     ActivityViewSet,
@@ -29,4 +32,9 @@ router.register("cell-supervision-visits", CellSupervisionVisitViewSet, basename
 router.register("teams", TeamViewSet, basename="team")
 router.register("activities", ActivityViewSet, basename="activity")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("public/explore/", explore_view, name="public-explore"),
+    path("public/cells/<uuid:cell_id>/", public_cell_view, name="public-cell"),
+    path("public/classes/<uuid:class_id>/", public_class_view, name="public-class"),
+    *router.urls,
+]

@@ -2,6 +2,7 @@ import logging
 
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status, viewsets
@@ -15,10 +16,13 @@ from apps.production.models import Event
 from apps.production.permissions import can_manage_event, scope_events
 from apps.production.realtime import broadcast_event_update
 
+from . import checkin
 from .asaas import AsaasError, cancel_charge, create_charge, find_or_create_customer
 from .models import ACTIVE_STATUSES, EventRegistration, EventTicketConfig, PaymentStatus
 from .permissions import RegistrationPermission, TicketConfigPermission
 from .serializers import (
+    CheckinInputSerializer,
+    CheckinRowSerializer,
     EventRegistrationSerializer,
     EventTicketConfigSerializer,
     RegistrationStatsSerializer,
@@ -190,6 +194,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         data = {
             "total": regs.exclude(payment_status=PaymentStatus.CANCELLED).count(),
             "confirmed": confirmed.count(),
+            "checked_in": confirmed.filter(checked_in_at__isnull=False).count(),
             "pending": regs.filter(payment_status=PaymentStatus.PENDING).count(),
             "cancelled": regs.filter(payment_status=PaymentStatus.CANCELLED).count(),
             "capacity": capacity,
@@ -198,3 +203,55 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         }
         serializer = RegistrationStatsSerializer(data)
         return Response(serializer.data)
+
+    # ── Check-in at the door ────────────────────────────────────────────────
+
+    def _door_event(self, event):
+        if not checkin.can_check_in(self.request.user, event):
+            raise PermissionDenied("Só a organização e a equipe escalada no evento fazem check-in.")
+        return event
+
+    @action(detail=False, methods=["get"], url_path="door-list")
+    def door_list(self, request):
+        """?event=: everyone confirmed or pending, for the check-in screen."""
+        event = self._door_event(get_object_or_404(Event, pk=request.query_params.get("event")))
+        registrations = (
+            EventRegistration.objects.filter(event=event, payment_status__in=ACTIVE_STATUSES)
+            .select_related("person")
+            .order_by("person__name")
+        )
+        confirmed = [r for r in registrations if r.payment_status == PaymentStatus.CONFIRMED]
+        return Response(
+            {
+                "confirmed": len(confirmed),
+                "checked_in": sum(1 for r in confirmed if r.checked_in_at),
+                "registrations": CheckinRowSerializer(registrations, many=True).data,
+            }
+        )
+
+    @action(detail=False, methods=["post"], url_path="checkin")
+    def checkin(self, request):
+        ser = CheckinInputSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        event = self._door_event(ser.validated_data["event"])
+        registration = checkin.find(
+            event, code=ser.validated_data["code"], registration_id=ser.validated_data["registration_id"]
+        )
+        registration, already = checkin.check_in(registration, request.user)
+        if not already:
+            broadcast_event_update(event.id, "checkin")
+        return Response(
+            {"registration": CheckinRowSerializer(registration).data, "already_checked_in": already}
+        )
+
+    @action(detail=False, methods=["post"], url_path="undo-checkin")
+    def undo_checkin(self, request):
+        ser = CheckinInputSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        event = self._door_event(ser.validated_data["event"])
+        registration = checkin.find(
+            event, code=ser.validated_data["code"], registration_id=ser.validated_data["registration_id"]
+        )
+        checkin.undo(registration)
+        broadcast_event_update(event.id, "checkin")
+        return Response({"registration": CheckinRowSerializer(registration).data})

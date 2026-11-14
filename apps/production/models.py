@@ -95,6 +95,9 @@ class Event(models.Model):
     series = models.ForeignKey(
         EventSeries, null=True, blank=True, on_delete=models.SET_NULL, related_name="events"
     )
+    # People counted in the room, for events without registration (a Sunday
+    # service). With registration, the check-ins are the attendance.
+    headcount = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

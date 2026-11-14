@@ -118,6 +118,7 @@ class EventSerializer(serializers.ModelSerializer):
             "can_manage",
             "can_check_in",
             "series",
+            "headcount",
             "created_at",
         ]
         read_only_fields = ["created_at", "series"]

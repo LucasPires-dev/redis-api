@@ -1,7 +1,9 @@
 import logging
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError, Sum
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -17,10 +19,11 @@ from apps.production.models import Event
 from apps.production.permissions import can_manage_event, scope_events
 from apps.production.realtime import broadcast_event_update
 
-from . import checkin, waitlist
-from .asaas import AsaasError, cancel_charge, create_charge, find_or_create_customer
+from . import checkin, reports, waitlist
+from .asaas import AsaasError, cancel_charge, create_charge, find_or_create_customer, refund_payment
 from .models import (
     ACTIVE_STATUSES,
+    EventExpense,
     EventRegistration,
     EventRegistrationGuest,
     EventTicketConfig,
@@ -28,12 +31,19 @@ from .models import (
     EventWaitlistEntry,
     PaymentStatus,
 )
-from .permissions import RegistrationPermission, TicketConfigPermission, TicketTypePermission
+from .permissions import (
+    ExpensePermission,
+    RegistrationPermission,
+    TicketConfigPermission,
+    TicketTypePermission,
+)
 from .serializers import (
     CheckinInputSerializer,
+    EventExpenseSerializer,
     EventRegistrationSerializer,
     EventTicketConfigSerializer,
     EventTicketTypeSerializer,
+    RefundInputSerializer,
     RegistrationStatsSerializer,
     WaitlistEntrySerializer,
     checkin_row,
@@ -41,6 +51,21 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+MANUAL_REFUND_MESSAGE = (
+    "O Asaas não estorna este pagamento (só cartão e Pix são estornados; boleto não). "
+    "Devolva o valor por fora, por exemplo com um Pix da igreja, e confirme a devolução."
+)
+
+
+def _event_or_none(event_id):
+    """The event for an id from the query string; None when missing or malformed."""
+    if not event_id:
+        return None
+    try:
+        return Event.objects.select_related("campus").filter(pk=event_id).first()
+    except (DjangoValidationError, ValueError):
+        return None
 
 
 class PaymentProviderUnavailable(APIException):
@@ -100,6 +125,10 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         # ?mine=1: only the caller's own registrations, even for an event manager
         # (who otherwise gets everyone's, for the attendee list).
         mine = self.request.query_params.get("mine") in ("1", "true")
+        # Cancel and refund find any registration; the permission decides
+        # (the person themselves, or the event's organizers).
+        if self.action in ("cancel", "refund"):
+            return qs
         if event_id:
             qs = qs.filter(event_id=event_id)
             event = Event.objects.filter(pk=event_id).first()
@@ -215,13 +244,18 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         registration = self.get_object()
-        if registration.payment_status == PaymentStatus.CANCELLED:
+        by_organizers = registration.person_id != request.user.pk
+        if registration.payment_status in (PaymentStatus.CANCELLED, PaymentStatus.REFUNDED):
             return Response(EventRegistrationSerializer(registration).data)
-        # A paid registration needs a refund in Asaas first — cancelling it here
-        # would silently keep the money. The organizers handle refunds.
-        if registration.payment_status == PaymentStatus.CONFIRMED and registration.asaas_payment_id:
+        # A paid registration needs a refund — cancelling it here would
+        # silently keep the money. The organizers refund it.
+        if registration.payment_status == PaymentStatus.CONFIRMED and registration.amount_cents:
             raise drf_serializers.ValidationError(
-                {"detail": "Inscrição já paga. Procure a organização do evento para solicitar o reembolso."}
+                {
+                    "detail": "Inscrição já paga: use Reembolsar."
+                    if by_organizers
+                    else "Inscrição já paga. Procure a organização do evento para solicitar o reembolso."
+                }
             )
         if registration.payment_status == PaymentStatus.PENDING and registration.asaas_payment_id:
             # Kill the payment link, otherwise the person could still pay a
@@ -236,6 +270,58 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         registration.save(update_fields=["payment_status", "updated_at"])
         waitlist.refresh(registration.event)  # the freed places go to whoever waits
         broadcast_event_update(registration.event_id, "registration")
+        if by_organizers:
+            triggers.event_registration_cancelled(registration)
+        return Response(EventRegistrationSerializer(registration).data)
+
+    @action(detail=True, methods=["post"], url_path="refund")
+    def refund(self, request, pk=None):
+        """Organizers give a paid registration's money back: through Asaas
+        (card, Pix) or, when Asaas can't (boleto), by hand with `manual`."""
+        registration = self.get_object()
+        if registration.payment_status == PaymentStatus.REFUNDED:
+            return Response(EventRegistrationSerializer(registration).data)
+        if registration.payment_status != PaymentStatus.CONFIRMED or not registration.amount_cents:
+            raise drf_serializers.ValidationError(
+                {"detail": "Só inscrições pagas são reembolsadas. Para as demais, use Cancelar."}
+            )
+        params = RefundInputSerializer(data=request.data)
+        params.is_valid(raise_exception=True)
+        note = params.validated_data["note"].strip()
+        manual = params.validated_data["manual"]
+
+        if registration.asaas_payment_id:
+            try:
+                refund_payment(registration.asaas_payment_id)
+            except AsaasError as exc:
+                if exc.status_code != 400:
+                    raise PaymentProviderUnavailable(
+                        "Não foi possível fazer o reembolso agora. Tente novamente em alguns minutos."
+                    )
+                if not manual:
+                    raise drf_serializers.ValidationError(
+                        {"detail": MANUAL_REFUND_MESSAGE, "code": "manual_refund_required"}
+                    )
+                note = f"Devolvido por fora{f' — {note}' if note else ''}"
+        elif not manual:
+            # Paid outside Asaas: the money goes back the same way.
+            raise drf_serializers.ValidationError(
+                {"detail": "Este pagamento não passou pelo Asaas. Devolva o valor por fora e confirme.",
+                 "code": "manual_refund_required"}
+            )
+        else:
+            note = f"Devolvido por fora{f' — {note}' if note else ''}"
+
+        registration.payment_status = PaymentStatus.REFUNDED
+        registration.refunded_at = timezone.now()
+        registration.refunded_by = request.user
+        registration.refund_note = note[:200]
+        registration.save(
+            update_fields=["payment_status", "refunded_at", "refunded_by", "refund_note", "updated_at"]
+        )
+        waitlist.refresh(registration.event)
+        broadcast_event_update(registration.event_id, "registration")
+        triggers.event_registration_refunded(registration)
         return Response(EventRegistrationSerializer(registration).data)
 
     @action(detail=False, methods=["get"], url_path="stats")
@@ -365,6 +451,97 @@ class WaitlistViewSet(
 
     def perform_destroy(self, instance):
         waitlist.leave(instance)
+
+
+class EventExpenseViewSet(viewsets.ModelViewSet):
+    """An event's expenses (?event=), for its organizers only."""
+
+    serializer_class = EventExpenseSerializer
+    permission_classes = [ExpensePermission]
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = EventExpense.objects.select_related("event", "created_by")
+        if self.action != "list":
+            return qs
+        event = _event_or_none(self.request.query_params.get("event"))
+        if event is None:
+            return qs.none()
+        if not can_manage_event(self.request.user, event):
+            raise PermissionDenied()
+        return qs.filter(event=event)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+def _managed_event(request, event_id):
+    event = _event_or_none(event_id)
+    if event is None:
+        raise NotFound("Evento não encontrado.")
+    if not can_manage_event(request.user, event):
+        raise PermissionDenied("Os relatórios são da organização do evento.")
+    return event
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def event_reports_view(request):
+    """The events the caller organizes, side by side (newest first).
+
+    ?events=<id>,<id> picks them; otherwise ?series= (its occurrences),
+    ?from=/?to= (dates) and ?limit= (default 30, up to 100). Without dates or
+    events, only events that already started."""
+    qs = scope_events(Event.objects.select_related("campus"), request.user)
+    ids = [i for i in request.query_params.get("events", "").split(",") if i]
+    if ids:
+        try:
+            qs = qs.filter(pk__in=ids[:12])
+        except (DjangoValidationError, ValueError):
+            return Response({"detail": "Eventos inválidos."}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        series = request.query_params.get("series")
+        if series:
+            qs = qs.filter(series_id=series)
+        start = request.query_params.get("from")
+        end = request.query_params.get("to")
+        if start:
+            qs = qs.filter(starts_at__date__gte=start)
+        if end:
+            qs = qs.filter(starts_at__date__lte=end)
+        if not (start or end):
+            qs = qs.filter(starts_at__lte=timezone.now())
+    try:
+        limit = min(max(int(request.query_params.get("limit", 30)), 1), 100)
+    except ValueError:
+        limit = 30
+    try:
+        events = [e for e in qs.order_by("-starts_at")[:300] if can_manage_event(request.user, e)][:limit]
+    except DjangoValidationError:
+        return Response({"detail": "Filtro inválido."}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({"results": [reports.compact(e) for e in events]})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def event_report_view(request, event_id):
+    """One event's report: attendance, tickets, money in and out."""
+    return Response(reports.summary(_managed_event(request, event_id)))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def event_report_csv_view(request, event_id):
+    """?kind=attendees (default) | finance — a CSV to open in a spreadsheet."""
+    event = _managed_event(request, event_id)
+    kind = request.query_params.get("kind", "attendees")
+    if kind not in ("attendees", "finance"):
+        return Response({"detail": "kind: attendees ou finance."}, status=status.HTTP_400_BAD_REQUEST)
+    content = reports.attendees_csv(event) if kind == "attendees" else reports.finance_csv(event)
+    name = reports.filename(event, "inscritos" if kind == "attendees" else "financeiro")
+    response = HttpResponse(content, content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{name}"'
+    return response
 
 
 @api_view(["GET"])

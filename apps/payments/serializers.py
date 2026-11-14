@@ -7,6 +7,7 @@ from apps.production.models import Event
 
 from . import waitlist
 from .models import (
+    EventExpense,
     EventRegistration,
     EventRegistrationGuest,
     EventTicketConfig,
@@ -249,11 +250,13 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
             "paid_at",
             "ticket_code",
             "checked_in_at",
+            "refunded_at",
+            "refund_note",
             "created_at",
         ]
         read_only_fields = [
             "payment_status", "amount_cents", "payment_url", "paid_at", "ticket_code", "checked_in_at", "created_at",
-            "seats",
+            "seats", "refunded_at", "refund_note",
         ]
 
 
@@ -354,3 +357,37 @@ def public_event(event):
         "sold_out": free is not None and free <= 0,
         "registration_open": not closed,
     }
+
+
+class RefundInputSerializer(serializers.Serializer):
+    note = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
+    # The money went back outside Asaas (boleto, cash): just record it.
+    manual = serializers.BooleanField(required=False, default=False)
+
+
+class EventExpenseSerializer(serializers.ModelSerializer):
+    event_id = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all(), source="event")
+    category_label = serializers.CharField(source="get_category_display", read_only=True)
+    created_by = serializers.SerializerMethodField()
+
+    def get_created_by(self, obj):
+        return {"id": str(obj.created_by_id), "name": obj.created_by.name} if obj.created_by_id else None
+
+    def validate_amount_cents(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Informe o valor.")
+        return value
+
+    def validate(self, attrs):
+        # An expense stays on its event.
+        if self.instance and "event" in attrs and attrs["event"] != self.instance.event:
+            raise serializers.ValidationError({"event_id": "Não é possível mudar o evento de uma despesa."})
+        return attrs
+
+    class Meta:
+        model = EventExpense
+        fields = [
+            "id", "event_id", "description", "category", "category_label", "amount_cents", "spent_on", "notes",
+            "created_by", "created_at",
+        ]
+        read_only_fields = ["created_at"]

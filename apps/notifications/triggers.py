@@ -80,6 +80,19 @@ def event_registration_confirmed(registration):
     )
 
 
+def event_waitlist_offer(entry):
+    """Places opened at a sold-out event: held for the first in line."""
+    places = "uma vaga" if entry.seats == 1 else f"{entry.seats} vagas"
+    notify(
+        entry.person_id,
+        "event_waitlist_offer",
+        f"Abriu vaga: {entry.event.title}",
+        body=f"Guardamos {places} para você até {when_text(entry.offer_expires_at)}. Faça a inscrição para garantir.",
+        link=f"/app/eventos/{entry.event_id}",
+        dedupe_key=f"event-waitlist-offer:{entry.pk}:{entry.offer_expires_at:%Y%m%d%H%M}",
+    )
+
+
 # ── Serving roster ───────────────────────────────────────────────────────────
 
 MY_ROSTER = "/app/eventos/escalas"

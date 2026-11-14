@@ -193,6 +193,8 @@ def scope_events(qs, person):
     # find them to sign up (a paid conference at their campus, for instance).
     if person.campus_id:
         condition |= Q(campus_id=person.campus_id, ticket_config__isnull=False)
+    # Events with a public link: anyone may find and register.
+    condition |= Q(ticket_config__is_public=True)
 
     from .models import EventProducerAssignment
 

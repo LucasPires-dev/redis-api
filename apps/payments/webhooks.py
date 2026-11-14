@@ -28,6 +28,7 @@ from rest_framework.response import Response
 from apps.notifications import triggers
 from apps.production.realtime import broadcast_event_update
 
+from . import waitlist
 from .asaas import AsaasError, get_payment_status
 from .models import EventRegistration, PaymentStatus
 
@@ -119,6 +120,8 @@ def asaas_webhook(request):
     else:
         return Response({"ok": True})
 
+    if registration.payment_status in (PaymentStatus.REFUNDED, PaymentStatus.CANCELLED):
+        waitlist.refresh(registration.event)  # the freed places go to whoever waits
     broadcast_event_update(registration.event_id, "registration")
     return Response({"ok": True})
 

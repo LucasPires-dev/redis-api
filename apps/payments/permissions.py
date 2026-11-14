@@ -25,6 +25,28 @@ class TicketConfigPermission(BasePermission):
         return can_manage_event(request.user, obj.event)
 
 
+class TicketTypePermission(BasePermission):
+    """Ticket types: anyone who sees the event reads them; its organizers change them."""
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if view.action == "create":
+            from .models import EventTicketConfig
+
+            config_id = request.data.get("config_id")
+            config = EventTicketConfig.objects.filter(pk=config_id).select_related("event").first()
+            if not config_id or config is None:
+                return True  # serializer will raise 400
+            return can_manage_event(request.user, config.event)
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return can_manage_event(request.user, obj.config.event)
+
+
 class RegistrationPermission(BasePermission):
     """Any authenticated user can register (create). Listing: users see their
     own; event managers see all (filtered in the viewset queryset). Cancel: own

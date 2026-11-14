@@ -12,7 +12,7 @@ from rest_framework.exceptions import NotFound
 from apps.production.choices import RosterStatus
 from apps.production.permissions import can_manage_event
 
-from .models import EventRegistration, PaymentStatus
+from .models import EventRegistration, EventRegistrationGuest, PaymentStatus
 
 
 def can_check_in(person, event) -> bool:
@@ -27,12 +27,13 @@ def normalize_code(raw) -> str:
 
 
 def find(event, *, code="", registration_id=None):
+    """The registration, or the companion, the ticket (or the id) belongs to."""
     qs = EventRegistration.objects.filter(event=event).select_related("person", "event")
+    guests = EventRegistrationGuest.objects.filter(registration__event=event).select_related("registration__person")
+    lookup = {"pk": registration_id} if registration_id else {"ticket_code": normalize_code(code)}
     registration = None
-    if registration_id:
-        registration = qs.filter(pk=registration_id).first()
-    elif normalize_code(code):
-        registration = qs.filter(ticket_code=normalize_code(code)).first()
+    if registration_id or lookup["ticket_code"]:
+        registration = qs.filter(**lookup).first() or guests.filter(**lookup).first()
     if registration is None:
         raise NotFound("Ingresso não encontrado para este evento.")
     return registration

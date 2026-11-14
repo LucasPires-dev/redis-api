@@ -6,19 +6,21 @@ from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from apps.churches.models import Ministry
 from apps.churches.permissions import can_manage_ministry
 from apps.notifications import triggers
 
-from . import roster
+from . import roster, series
 from .choices import DemandStatus, RosterStatus, SwapStatus
 from .models import (
     Demand,
     Event,
     EventChecklistItem,
     EventRosterEntry,
+    EventSeries,
     RosterSwapRequest,
     RundownItem,
     RundownItemStatus,
@@ -29,17 +31,22 @@ from .permissions import (
     EventChecklistItemPermission,
     EventPermission,
     EventRosterEntryPermission,
+    EventSeriesPermission,
     RundownItemPermission,
     is_any_event_producer,
+    can_manage_event,
+    can_manage_series,
     scope_demands,
     scope_events,
 )
 from .realtime import broadcast_event_update
 from .serializers import (
     DemandSerializer,
+    DuplicateEventInputSerializer,
     EventChecklistItemSerializer,
     EventRosterEntrySerializer,
     EventSerializer,
+    EventSeriesSerializer,
     RejectDemandInputSerializer,
     RosterSwapSerializer,
     RundownItemSerializer,
@@ -48,18 +55,51 @@ from .serializers import (
 )
 
 
+class EventPagination(PageNumberPagination):
+    """The calendar loads a whole month at once (?page_size=)."""
+
+    page_size_query_param = "page_size"
+    max_page_size = 500
+
+
 class EventViewSet(viewsets.ModelViewSet):
     serializer_class = EventSerializer
     permission_classes = [EventPermission]
+    pagination_class = EventPagination
 
     def get_queryset(self):
         qs = Event.objects.select_related("campus", "ticket_config").prefetch_related(
             "rundown_items__statuses"
         )
-        campus_id = self.request.query_params.get("campus")
+        params = self.request.query_params
+        campus_id = params.get("campus")
         if campus_id:
             qs = qs.filter(campus_id=campus_id)
+        # The calendar asks for a range of days: ?from=2026-11-01&to=2026-11-30
+        if params.get("from"):
+            qs = qs.filter(starts_at__date__gte=params["from"])
+        if params.get("to"):
+            qs = qs.filter(starts_at__date__lte=params["to"])
         return scope_events(qs, self.request.user)
+
+    def perform_destroy(self, instance):
+        series.skip(instance)  # a deleted occurrence of a recurring event stays deleted
+        instance.delete()
+
+    @action(detail=True, methods=["post"])
+    def duplicate(self, request, pk=None):
+        """A copy on another date: rundown, checklist, ticket and (optionally) the roster."""
+        source = self.get_object()  # has_object_permission -> can_manage_event
+        data = DuplicateEventInputSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        event = series.duplicate_event(
+            source,
+            data.validated_data["starts_at"],
+            by=request.user,
+            title=data.validated_data["title"].strip() or None,
+            copy_roster=data.validated_data["copy_roster"],
+        )
+        return Response(EventSerializer(event, context={"request": request}).data, status=201)
 
     def perform_create(self, serializer):
         extra = {"created_by": self.request.user}
@@ -298,3 +338,42 @@ class EventChecklistItemViewSet(viewsets.ModelViewSet):
         item.save(update_fields=["is_done", "done_by", "done_at"])
         broadcast_event_update(item.event_id, "checklist_item")
         return Response(EventChecklistItemSerializer(item).data)
+
+
+class EventSeriesViewSet(viewsets.ModelViewSet):
+    """Recurring events. Creating one generates its first occurrences; ending
+    it (DELETE) removes the upcoming ones without registrations."""
+
+    serializer_class = EventSeriesSerializer
+    permission_classes = [EventSeriesPermission]
+
+    def get_queryset(self):
+        qs = EventSeries.objects.select_related("campus", "template", "template__campus")
+        user = self.request.user
+        if user.is_manager:
+            return qs
+        return qs.filter(pk__in=[s.pk for s in qs if can_manage_series(user, s)])
+
+    def _check_template(self, serializer):
+        template = serializer.validated_data.get("template")
+        if template is not None and not can_manage_event(self.request.user, template):
+            raise PermissionDenied("Você não organiza o evento escolhido como modelo.")
+
+    def perform_create(self, serializer):
+        self._check_template(serializer)
+        created = serializer.save(created_by=self.request.user)
+        series.generate(created)
+
+    def perform_update(self, serializer):
+        self._check_template(serializer)
+        updated = serializer.save()
+        series.generate(updated)
+
+    def perform_destroy(self, instance):
+        series.remove_future(instance)
+        instance.delete()
+
+    @action(detail=True, methods=["post"])
+    def generate(self, request, pk=None):
+        created = series.generate(self.get_object())
+        return Response({"created": len(created)})

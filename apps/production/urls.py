@@ -4,6 +4,7 @@ from .views import (
     DemandViewSet,
     EventChecklistItemViewSet,
     EventRosterEntryViewSet,
+    EventSeriesViewSet,
     EventViewSet,
     RosterSwapViewSet,
     RundownItemViewSet,
@@ -11,6 +12,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register("production-events", EventViewSet, basename="production-event")
+router.register("production-series", EventSeriesViewSet, basename="production-series")
 router.register("production-rundown-items", RundownItemViewSet, basename="production-rundown-item")
 router.register("production-demands", DemandViewSet, basename="production-demand")
 router.register("production-roster-entries", EventRosterEntryViewSet, basename="production-roster-entry")

@@ -12,6 +12,7 @@ from .models import (
     Demand,
     Event,
     EventChecklistItem,
+    EventSeries,
     EventRosterEntry,
     RosterSwapRequest,
     RundownItem,
@@ -116,9 +117,10 @@ class EventSerializer(serializers.ModelSerializer):
             "ticket_config",
             "can_manage",
             "can_check_in",
+            "series",
             "created_at",
         ]
-        read_only_fields = ["created_at"]
+        read_only_fields = ["created_at", "series"]
 
     def get_can_manage(self, obj):
         request = self.context.get("request")
@@ -349,3 +351,83 @@ class EventChecklistItemSerializer(serializers.ModelSerializer):
         model = EventChecklistItem
         fields = ["id", "event_id", "ministry_kind", "text", "is_done", "done_by", "done_at", "created_at"]
         read_only_fields = ["is_done", "done_by", "done_at", "created_at"]
+
+
+class DuplicateEventInputSerializer(serializers.Serializer):
+    starts_at = serializers.DateTimeField()
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True, default="")
+    copy_roster = serializers.BooleanField(default=True)
+
+
+class EventSeriesSerializer(serializers.ModelSerializer):
+    campus = ProductionCampusMiniSerializer(read_only=True)
+    campus_id = serializers.PrimaryKeyRelatedField(
+        queryset=Campus.objects.all(), source="campus", write_only=True, required=False, allow_null=True
+    )
+    template = EventMiniSerializer(read_only=True)
+    template_id = serializers.PrimaryKeyRelatedField(
+        queryset=Event.objects.all(), source="template", write_only=True, required=False, allow_null=True
+    )
+    next_dates = serializers.SerializerMethodField()
+    upcoming = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EventSeries
+        fields = [
+            "id",
+            "title",
+            "description",
+            "event_type",
+            "campus",
+            "campus_id",
+            "ministry_kind",
+            "weekday",
+            "start_time",
+            "duration_minutes",
+            "every_weeks",
+            "starts_on",
+            "ends_on",
+            "template",
+            "template_id",
+            "copy_roster",
+            "weeks_ahead",
+            "is_active",
+            "next_dates",
+            "upcoming",
+            "created_at",
+        ]
+        read_only_fields = ["created_at"]
+
+    def get_next_dates(self, obj):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .series import occurrences
+
+        today = timezone.localdate()
+        return [d.isoformat() for d in occurrences(obj, today, today + timedelta(weeks=12))][:4]
+
+    def get_upcoming(self, obj):
+        from django.utils import timezone
+
+        return obj.events.filter(starts_at__gt=timezone.now()).count()
+
+    def validate(self, attrs):
+        def value(name):
+            return attrs[name] if name in attrs else getattr(self.instance, name, None)
+
+        errors = {}
+        if value("weekday") is not None and not 0 <= value("weekday") <= 6:
+            errors["weekday"] = "Dia da semana inválido."
+        if not 1 <= (value("every_weeks") or 1) <= 4:
+            errors["every_weeks"] = "De 1 a 4 semanas."
+        if not 1 <= (value("weeks_ahead") or 1) <= 12:
+            errors["weeks_ahead"] = "Gere de 1 a 12 semanas à frente."
+        if not 15 <= (value("duration_minutes") or 15) <= 24 * 60:
+            errors["duration_minutes"] = "Duração entre 15 minutos e 24 horas."
+        if value("ends_on") and value("starts_on") and value("ends_on") < value("starts_on"):
+            errors["ends_on"] = "O fim precisa ser depois do início."
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs

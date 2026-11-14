@@ -1163,7 +1163,8 @@ class CellSupervisionVisitViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if not can_supervise_cell(self.request.user, serializer.validated_data["cell"]):
             raise PermissionDenied("Você não supervisiona esta célula.")
-        serializer.save(created_by=self.request.user)
+        visit = serializer.save(created_by=self.request.user)
+        triggers.supervision_visit_registered(visit)
 
 
 class CellVisitorViewSet(viewsets.ModelViewSet):
@@ -1226,6 +1227,7 @@ class CellVisitorViewSet(viewsets.ModelViewSet):
             )
             visitor.status = VisitorStatus.FORWARDED
             visitor.save(update_fields=["reconciliation_lead", "status", "updated_at"])
+        triggers.visitor_forwarded(visitor)
         return self._fresh(visitor)
 
     @action(detail=True, methods=["post"], url_path="make-member")

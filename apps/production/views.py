@@ -7,6 +7,7 @@ from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.churches.models import Ministry
@@ -24,6 +25,7 @@ from .models import (
     RosterSwapRequest,
     RundownItem,
     RundownItemStatus,
+    ServeUnavailability,
 )
 from .permissions import (
     PRODUCER_EVENT_TYPES,
@@ -52,6 +54,7 @@ from .serializers import (
     RundownItemSerializer,
     SetItemStatusInputSerializer,
     SwapInputSerializer,
+    ServeUnavailabilitySerializer,
 )
 
 
@@ -239,9 +242,35 @@ class EventRosterEntryViewSet(viewsets.ModelViewSet):
         entry = self.get_object()
         if entry.person_id != request.user.pk and not can_manage_ministry(request.user, entry.ministry):
             raise PermissionDenied()
-        people = roster.swap_candidates(entry)
+        people = list(roster.swap_candidates(entry))
+        away = roster.unavailable_people([p.pk for p in people], entry.event)
         return Response(
-            [{"id": p.pk, "name": p.name, "conflict": bool(roster.conflicts(p.pk, entry.event))} for p in people]
+            [
+                {
+                    "id": p.pk,
+                    "name": p.name,
+                    "conflict": bool(roster.conflicts(p.pk, entry.event)),
+                    "unavailable": p.pk in away,
+                }
+                for p in people
+            ]
+        )
+
+    @action(detail=False, methods=["get"])
+    def availability(self, request):
+        """Before inviting: who of the ministry marked the event's day as
+        unavailable (?event=&ministry=)."""
+        event = get_object_or_404(Event, pk=request.query_params.get("event"))
+        ministry = get_object_or_404(Ministry, pk=request.query_params.get("ministry"))
+        if not can_manage_ministry(request.user, ministry):
+            raise PermissionDenied("Só a liderança do ministério convida para a escala.")
+        people = list(roster.ministry_people(ministry))
+        away = roster.unavailable_people([p.pk for p in people], event)
+        return Response(
+            [
+                {"id": p.pk, "name": p.name, "unavailable": roster.unavailability_data(away.get(p.pk))}
+                for p in people
+            ]
         )
 
     @action(detail=True, methods=["post"])
@@ -377,3 +406,26 @@ class EventSeriesViewSet(viewsets.ModelViewSet):
     def generate(self, request, pk=None):
         created = series.generate(self.get_object())
         return Response({"created": len(created)})
+
+
+class ServeUnavailabilityViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """The caller's own days without serving (current and upcoming)."""
+
+    serializer_class = ServeUnavailabilitySerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = ServeUnavailability.objects.filter(person=self.request.user)
+        if self.action == "list":
+            qs = qs.filter(ends_on__gte=timezone.localdate())
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(person=self.request.user)

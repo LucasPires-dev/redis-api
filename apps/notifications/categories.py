@@ -16,13 +16,19 @@ CATEGORIES = {
     },
     "cells": {
         "label": "Células",
-        "description": "Encontros para registrar e pessoas para cuidar.",
-        "kinds": {"meeting_not_registered", "cell_care"},
+        "description": "Encontros para registrar, pessoas para cuidar, supervisão e visitantes encaminhados.",
+        "kinds": {"meeting_not_registered", "cell_care", "supervision_visit", "visitor_forwarded"},
     },
     "events": {
         "label": "Eventos",
         "description": "Inscrições confirmadas, vagas da lista de espera e lembretes na véspera.",
-        "kinds": {"event_registration", "event_tomorrow", "event_waitlist_offer", "event_offer_expiring"},
+        "kinds": {
+            "event_registration",
+            "event_tomorrow",
+            "event_waitlist_offer",
+            "event_offer_expiring",
+            "event_payment_pending",
+        },
     },
     "service": {
         "label": "Escalas e produção",

@@ -23,7 +23,7 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
-from apps.churches.choices import LeadershipRole
+from apps.churches.choices import LeadershipRole, Visibility
 
 from .choices import (
     SEAT_HOLDING_PAYMENT_STATUSES,
@@ -104,6 +104,9 @@ class CourseClass(models.Model):
     # Members can find the class and enroll themselves (otherwise only the
     # coordinators enroll people).
     self_enrollment = models.BooleanField(default=False)
+    # Members of the church only, or open to everyone (people of other
+    # churches, or without one).
+    visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.MEMBERS)
     max_capacity = models.PositiveIntegerField(null=True, blank=True)  # null = unlimited
     enrollment_deadline = models.DateField(null=True, blank=True)  # last day to self-enroll
     # Days a self-enrollment holds the seat while unpaid; also the charge due date.

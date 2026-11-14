@@ -68,7 +68,6 @@ class EventTicketInputSerializer(serializers.Serializer):
     registration_deadline = serializers.DateTimeField(required=False, allow_null=True)
     description = serializers.CharField(required=False, allow_blank=True, default="")
     max_companions = serializers.IntegerField(required=False, min_value=0, default=0)
-    is_public = serializers.BooleanField(required=False, default=False)
 
 
 class EventTicketTypeSerializer(serializers.ModelSerializer):
@@ -149,7 +148,6 @@ class EventTicketConfigSerializer(serializers.ModelSerializer):
             "registration_deadline",
             "description",
             "max_companions",
-            "is_public",
             "types",
             "free_seats",
             "created_at",
@@ -347,6 +345,7 @@ def public_event(event):
         "starts_at": event.starts_at,
         "ends_at": event.ends_at,
         "campus": {"name": event.campus.name, "city": event.campus.city} if event.campus_id else None,
+        "church": event.church.name if event.church_id else None,
         "ticket": {
             "description": config.description,
             "price_cents": config.price_cents,

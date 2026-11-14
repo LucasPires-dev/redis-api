@@ -108,6 +108,8 @@ class EventSerializer(serializers.ModelSerializer):
             "campus",
             "campus_id",
             "ministry_kind",
+            "church",
+            "visibility",
             "starts_at",
             "ends_at",
             "status",
@@ -123,6 +125,11 @@ class EventSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["created_at", "series"]
+
+    church = serializers.SerializerMethodField()
+
+    def get_church(self, obj):
+        return {"id": str(obj.church_id), "name": obj.church.name} if obj.church_id else None
 
     def get_can_manage(self, obj):
         request = self.context.get("request")

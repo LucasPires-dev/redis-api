@@ -13,6 +13,7 @@ from rest_framework.exceptions import APIException, NotFound, PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.churches.choices import Visibility
 from apps.notifications import triggers
 from apps.people.cpf import apply_cpf, require_cpf
 from apps.production.models import Event
@@ -548,11 +549,11 @@ def event_report_csv_view(request, event_id):
 @authentication_classes([])
 @permission_classes([AllowAny])
 def public_event_view(request, event_id):
-    """The public link of an event (/evento/<id>): only when its organizers opened it."""
+    """The public link of an event (/evento/<id>): only for public events with registration."""
     event = (
-        Event.objects.select_related("campus", "ticket_config")
+        Event.objects.select_related("campus", "church", "ticket_config")
         .prefetch_related("ticket_config__types")
-        .filter(pk=event_id, ticket_config__is_public=True)
+        .filter(pk=event_id, visibility=Visibility.PUBLIC, ticket_config__isnull=False)
         .first()
     )
     if event is None:

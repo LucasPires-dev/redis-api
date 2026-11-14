@@ -632,6 +632,44 @@ class CellVisitor(models.Model):
         return f"{self.name} (visitante de {self.cell})"
 
 
+class CellJoinRequest(models.Model):
+    """"Quero participar": someone (any account, linked to a church or not) asks
+    to join a public cell. The cell's leadership accepts (the person becomes a
+    named visitor, and only then gets the address and the leaders) or declines."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cell = models.ForeignKey(Cell, on_delete=models.CASCADE, related_name="join_requests")
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cell_join_requests"
+    )
+    message = models.CharField(max_length=300, blank=True)
+    status = models.CharField(
+        max_length=16, choices=JoinRequestStatus.choices, default=JoinRequestStatus.PENDING
+    )
+    # The visitor created on acceptance (the cell's follow-up starts there).
+    visitor = models.OneToOneField(
+        CellVisitor, null=True, blank=True, on_delete=models.SET_NULL, related_name="join_request"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cell", "person"],
+                condition=Q(status=JoinRequestStatus.PENDING),
+                name="unique_pending_cell_join_request",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.person} quer participar de {self.cell}"
+
+
 class CellMeeting(models.Model):
     """One meeting of a cell on a given date, with who attended.
 

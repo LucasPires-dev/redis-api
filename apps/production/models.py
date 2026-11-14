@@ -17,6 +17,56 @@ from .choices import (
 )
 
 
+class EventSeries(models.Model):
+    """A recurring event (the Sunday service, the Wednesday prayer...): its
+    occurrences are created ahead of time, `weeks_ahead` weeks at a time, by a
+    daily task (see series.py). With a `template`, each one is a copy of it:
+    rundown, checklist, ticket and, when `copy_roster`, the roster.
+
+    `skipped_dates` are dates whose occurrence was deleted on purpose (a
+    holiday): they are not created again."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    event_type = models.CharField(max_length=20, choices=EventType.choices, default=EventType.CULTO)
+    campus = models.ForeignKey(
+        "churches.Campus", null=True, blank=True, on_delete=models.CASCADE, related_name="event_series"
+    )
+    ministry_kind = models.CharField(max_length=32, choices=MinistryKind.choices, null=True, blank=True)
+    # Python's weekday(): 0 = Monday … 6 = Sunday.
+    weekday = models.PositiveSmallIntegerField()
+    start_time = models.TimeField()
+    duration_minutes = models.PositiveIntegerField(default=120)
+    every_weeks = models.PositiveSmallIntegerField(default=1)
+    starts_on = models.DateField()
+    ends_on = models.DateField(null=True, blank=True)
+    template = models.ForeignKey(
+        "Event", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    copy_roster = models.BooleanField(default=False)
+    weeks_ahead = models.PositiveSmallIntegerField(default=6)
+    skipped_dates = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["weekday", "start_time"]
+        verbose_name_plural = "event series"
+
+    def __str__(self):
+        return f"{self.title} (toda {self.get_weekday_display()})"
+
+    WEEKDAYS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+
+    def get_weekday_display(self):
+        return self.WEEKDAYS[self.weekday]
+
+
 class Event(models.Model):
     """Generalization of "Culto": both the regular weekly service (created by the
     Coordenação Geral, with null campus and ministry_kind) and an event of an
@@ -40,6 +90,10 @@ class Event(models.Model):
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    # The recurring event it was created from, if any.
+    series = models.ForeignKey(
+        EventSeries, null=True, blank=True, on_delete=models.SET_NULL, related_name="events"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -131,6 +131,18 @@ def can_manage_checklist_item(person, item, ministry_kind=None) -> bool:
     return _can_act_for_ministry_on_event(person, item.event, ministry_kind or item.ministry_kind)
 
 
+def can_manage_series(person, series) -> bool:
+    """A recurring event: whoever created it, or whoever would manage its events."""
+    if not person.is_authenticated:
+        return False
+    if person.is_manager or series.created_by_id == person.pk:
+        return True
+    from .models import Event
+
+    sample = Event(campus=series.campus, ministry_kind=series.ministry_kind, event_type=series.event_type)
+    return can_manage_event(person, sample)
+
+
 def can_respond_roster_entry(person, entry) -> bool:
     """Confirm/decline: the invited person themselves, or whoever manages the
     ministry (local/general leader or campus leader, via can_manage_ministry)."""
@@ -392,3 +404,27 @@ class EventChecklistItemPermission(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         return can_manage_checklist_item(request.user, obj)
+
+
+class EventSeriesPermission(BasePermission):
+    """Create: whoever may create such an event (can_create_event). Read,
+    change and end it: can_manage_series (the queryset is already filtered)."""
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if view.action == "create":
+            from apps.churches.models import Campus
+
+            campus_id = request.data.get("campus_id") or None
+            campus = Campus.objects.filter(pk=campus_id).first() if campus_id else None
+            return can_create_event(
+                request.user,
+                request.data.get("event_type") or EventType.CULTO,
+                request.data.get("ministry_kind") or None,
+                campus,
+            )
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        return can_manage_series(request.user, obj)

@@ -149,6 +149,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.notifications.tasks.send_daily_reminders",
         "schedule": crontab(minute=0, hour=8),
     },
+    # Recurring events (apps/production/series.py): the next weeks' occurrences.
+    "production-series": {
+        "task": "apps.production.tasks.generate_series_events",
+        "schedule": crontab(minute=0, hour=6),
+    },
     "notifications-weekly": {
         "task": "apps.notifications.tasks.send_weekly_reminders",
         "schedule": crontab(minute=30, hour=8, day_of_week="mon"),

@@ -296,3 +296,26 @@ class EventProducerAssignment(models.Model):
     def __str__(self):
         scope = self.campus.name if self.campus else "Church-wide"
         return f"{self.person} — Produtor ({scope})"
+
+
+class ServeUnavailability(models.Model):
+    """Days someone can't serve (a trip, a shift, rest), marked by the person.
+    The leadership sees it when building the roster — a warning, not a block."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="unavailabilities")
+    starts_on = models.DateField()
+    ends_on = models.DateField()
+    reason = models.CharField(max_length=120, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["starts_on", "ends_on"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(ends_on__gte=models.F("starts_on")), name="unavailability_ends_after_start"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.person} indisponível de {self.starts_on} a {self.ends_on}"

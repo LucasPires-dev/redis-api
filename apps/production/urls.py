@@ -8,6 +8,7 @@ from .views import (
     EventViewSet,
     RosterSwapViewSet,
     RundownItemViewSet,
+    ServeUnavailabilityViewSet,
 )
 
 router = DefaultRouter()
@@ -17,6 +18,7 @@ router.register("production-rundown-items", RundownItemViewSet, basename="produc
 router.register("production-demands", DemandViewSet, basename="production-demand")
 router.register("production-roster-entries", EventRosterEntryViewSet, basename="production-roster-entry")
 router.register("production-roster-swaps", RosterSwapViewSet, basename="production-roster-swap")
+router.register("production-unavailability", ServeUnavailabilityViewSet, basename="production-unavailability")
 router.register("production-checklist-items", EventChecklistItemViewSet, basename="production-checklist-item")
 
 urlpatterns = router.urls

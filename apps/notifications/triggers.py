@@ -86,7 +86,7 @@ def event_registration_refunded(registration):
         registration.person_id,
         "event_registration",
         f"Inscrição reembolsada: {registration.event.title}",
-        body=f"Devolvemos R$ {registration.amount_cents / 100:.2f}.".replace(".", ","),
+        body=f"Devolvemos {money_text(registration.amount_cents)}.",
         link="/app/eventos/inscricoes",
         dedupe_key=f"event-registration-refunded:{registration.pk}",
     )
@@ -272,6 +272,56 @@ def demand_answered(demand, by):
 
 
 # ── Joining a campus ─────────────────────────────────────────────────────────
+
+
+def supervision_visit_registered(visit):
+    """The cell's leaders hear their supervisor followed the cell up. The notes
+    stay with the supervisor and coordination."""
+    from apps.churches.choices import CellRole
+
+    cell = visit.cell
+    leaders = [
+        lead.person_id
+        for lead in cell.leaderships.all()
+        if lead.role in (CellRole.LEADER, CellRole.CO_LEADER) and lead.person_id != visit.created_by_id
+    ]
+    who = visit.created_by.name if visit.created_by_id else "A supervisão"
+    notify(
+        leaders,
+        "supervision_visit",
+        f"Visita de supervisão: {cell.name}",
+        body=f"{who} registrou um acompanhamento ({visit.get_kind_display().lower()}) "
+        f"em {visit.date:%d/%m}.",
+        link=f"/app/celulas/{cell.pk}",
+        dedupe_key=f"supervision-visit:{visit.pk}",
+    )
+
+
+def visitor_forwarded(visitor):
+    """A cell visitor handed to Reconciliação: its leaders at the campus (or
+    the general leaders; with none, the campus leadership) take it from there."""
+    from apps.churches.choices import MinistryKind
+    from apps.churches.models import MinistryGeneralLeadership, MinistryLeadership
+
+    cell = visitor.cell
+    recipients = set(
+        MinistryLeadership.objects.filter(
+            ministry__campus=cell.campus, ministry__kind=MinistryKind.RECONCILIACAO
+        ).values_list("person_id", flat=True)
+    )
+    general = MinistryGeneralLeadership.objects.filter(kind=MinistryKind.RECONCILIACAO).first()
+    if general:
+        recipients.update(general.leaders.values_list("pk", flat=True))
+    if not recipients:
+        recipients = {lead.person_id for lead in cell.campus.leaderships.all()}
+    notify(
+        list(recipients),
+        "visitor_forwarded",
+        f"Visitante encaminhado: {visitor.name}",
+        body=f"Veio da célula {cell.name} ({cell.campus.name}) e aguarda um reconciliador.",
+        link=f"/app/ministerios/reconciliacao/{cell.campus_id}",
+        dedupe_key=f"visitor-forwarded:{visitor.pk}",
+    )
 
 
 def join_request_created(join_request):

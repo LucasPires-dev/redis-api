@@ -24,7 +24,7 @@ from apps.production.models import EventRosterEntry
 
 from .models import Notification
 from .service import notify
-from .triggers import class_label, when_text
+from .triggers import class_label, money_text as money, when_text
 
 # How close to the deadline a reservation or a held seat gets its reminder.
 DEADLINE_WINDOW = timedelta(hours=12)
@@ -195,6 +195,36 @@ def events_tomorrow(today=None):
     return sent
 
 
+# How long a registration may wait for its payment before the reminder.
+PAYMENT_GRACE = timedelta(days=1)
+
+
+def event_payments_pending(now=None):
+    """A registration still waiting for its payment a day after it was made
+    (and before the event): once, with the payment link."""
+    now = now or timezone.now()
+    registrations = EventRegistration.objects.filter(
+        payment_status=PaymentStatus.PENDING,
+        created_at__lte=now - PAYMENT_GRACE,
+        event__starts_at__gt=now,
+    ).exclude(payment_url="").exclude(event__status=EventStatus.CLOSED).select_related("event")
+    sent = 0
+    for registration in registrations:
+        event = registration.event
+        sent += len(
+            notify(
+                registration.person_id,
+                "event_payment_pending",
+                f"Pagamento pendente: {event.title}",
+                body=f"Sua inscrição aguarda o pagamento de {money(registration.amount_cents)}. "
+                f"O evento é {when_text(event.starts_at)}.",
+                link="/app/eventos/inscricoes",
+                dedupe_key=f"event-payment-pending:{registration.pk}",
+            )
+        )
+    return sent
+
+
 def _serving(entry) -> str:
     return entry.ministry.name + (f" · {entry.function}" if entry.function else "")
 
@@ -328,5 +358,12 @@ HOURLY = [
     refresh_event_waitlists,
     event_offers_expiring,
 ]
-DAILY = [meetings_not_registered, events_tomorrow, roster_tomorrow, roster_unanswered, clean_up]
+DAILY = [
+    meetings_not_registered,
+    events_tomorrow,
+    event_payments_pending,
+    roster_tomorrow,
+    roster_unanswered,
+    clean_up,
+]
 WEEKLY = [cells_to_care, classes_to_care]

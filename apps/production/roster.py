@@ -4,6 +4,8 @@ Conflict: the person is already on the roster (not declined) of another event
 whose time overlaps. It is a warning, never a block (the leader may know the
 person serves only part of each).
 
+Unavailability: days the person marked as not able to serve. Also a warning.
+
 Swap: someone who can't serve asks another member of the same ministry to take
 their place. When the substitute accepts, the entry passes to them, confirmed.
 """
@@ -19,7 +21,7 @@ from rest_framework import serializers
 from apps.notifications import triggers
 
 from .choices import RosterStatus, SwapStatus
-from .models import EventRosterEntry, RosterSwapRequest
+from .models import EventRosterEntry, RosterSwapRequest, ServeUnavailability
 
 # Events without an end are taken as lasting this long.
 DEFAULT_DURATION = timedelta(hours=2)
@@ -48,6 +50,27 @@ def conflicts(person_id, event):
         if other_start < end and start < other_end:
             found[entry.event_id] = entry.event
     return sorted(found.values(), key=lambda e: e.starts_at)
+
+
+def unavailable_people(person_ids, event):
+    """{person_id: ServeUnavailability} for those who marked the event's day(s)
+    as unavailable."""
+    start, end = window(event)
+    first, last = timezone.localdate(start), timezone.localdate(end)
+    found = {}
+    for u in ServeUnavailability.objects.filter(
+        person_id__in=list(person_ids), starts_on__lte=last, ends_on__gte=first
+    ).order_by("starts_on"):
+        found.setdefault(u.person_id, u)
+    return found
+
+
+def unavailable(person_id, event):
+    return unavailable_people([person_id], event).get(person_id)
+
+
+def unavailability_data(u):
+    return {"starts_on": u.starts_on, "ends_on": u.ends_on, "reason": u.reason} if u else None
 
 
 def ministry_people(ministry):

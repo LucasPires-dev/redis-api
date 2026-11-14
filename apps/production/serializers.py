@@ -17,6 +17,7 @@ from .models import (
     RosterSwapRequest,
     RundownItem,
     RundownItemStatus,
+    ServeUnavailability,
 )
 from .permissions import can_manage_demand_source, can_manage_demand_target, can_manage_event
 
@@ -282,6 +283,7 @@ class EventRosterEntrySerializer(serializers.ModelSerializer):
     event_id = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all(), source="event", write_only=True)
     event = EventMiniSerializer(read_only=True)
     conflicts = serializers.SerializerMethodField()
+    unavailable = serializers.SerializerMethodField()
     pending_swap = serializers.SerializerMethodField()
 
     class Meta:
@@ -299,6 +301,7 @@ class EventRosterEntrySerializer(serializers.ModelSerializer):
             "responded_at",
             "created_at",
             "conflicts",
+            "unavailable",
             "pending_swap",
         ]
         read_only_fields = ["status", "responded_at", "created_at"]
@@ -311,6 +314,14 @@ class EventRosterEntrySerializer(serializers.ModelSerializer):
             return []
         found = conflicts(entry.person_id, entry.event)
         return [{"id": e.pk, "title": e.title, "starts_at": e.starts_at} for e in found]
+
+    def get_unavailable(self, entry):
+        """The person marked the event's day as unavailable (a warning)."""
+        from .roster import unavailability_data, unavailable
+
+        if entry.status == RosterStatus.DECLINED:
+            return None
+        return unavailability_data(unavailable(entry.person_id, entry.event))
 
     def get_pending_swap(self, entry):
         swap = next((s for s in entry.swap_requests.all() if s.status == SwapStatus.PENDING), None)
@@ -431,4 +442,21 @@ class EventSeriesSerializer(serializers.ModelSerializer):
             errors["ends_on"] = "O fim precisa ser depois do início."
         if errors:
             raise serializers.ValidationError(errors)
+        return attrs
+
+
+class ServeUnavailabilitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServeUnavailability
+        fields = ["id", "starts_on", "ends_on", "reason", "created_at"]
+        read_only_fields = ["created_at"]
+
+    def validate(self, attrs):
+        starts_on = attrs.get("starts_on", getattr(self.instance, "starts_on", None))
+        ends_on = attrs.get("ends_on", getattr(self.instance, "ends_on", None))
+        if starts_on and ends_on:
+            if ends_on < starts_on:
+                raise serializers.ValidationError({"ends_on": "A data final vem depois da inicial."})
+            if (ends_on - starts_on).days > 366:
+                raise serializers.ValidationError({"ends_on": "Marque no máximo um ano por vez."})
         return attrs

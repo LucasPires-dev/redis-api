@@ -33,6 +33,8 @@ def duplicate_event(source, starts_at, *, by, title=None, copy_roster=True, seri
             event_type=source.event_type,
             campus=source.campus,
             ministry_kind=source.ministry_kind,
+            church=source.church,
+            visibility=source.visibility,
             starts_at=starts_at,
             ends_at=_shift(source.ends_at, delta),
             status=EventStatus.PLANNING,
@@ -66,7 +68,6 @@ def duplicate_event(source, starts_at, *, by, title=None, copy_roster=True, seri
                 registration_deadline=_shift(config.registration_deadline, delta),
                 description=config.description,
                 max_companions=config.max_companions,
-                is_public=config.is_public,
             )
             EventTicketType.objects.bulk_create(
                 EventTicketType(

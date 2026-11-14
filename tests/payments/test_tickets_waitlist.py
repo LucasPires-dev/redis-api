@@ -204,8 +204,8 @@ def test_public_link_only_when_opened(api_client, other_campus, free_with_types,
     api_client.force_authenticate(user=None)
     assert api_client.get(f"{URL}/public-events/{event.id}/").status_code == 404
 
-    config.is_public = True
-    config.save()
+    event.visibility = "public"
+    event.save()
     res = api_client.get(f"{URL}/public-events/{event.id}/")
     assert res.status_code == 200
     assert res.data["title"] == event.title
@@ -235,10 +235,12 @@ def test_event_created_with_a_public_ticket(api_client, jovens_leader, campus):
             "campus_id": str(campus.id),
             "event_type": "ministry_event",
             "starts_at": (timezone.now() + timedelta(days=10)).isoformat(),
-            "ticket": {"price_cents": 0, "max_companions": 2, "is_public": True},
+            "visibility": "public",
+            "ticket": {"price_cents": 0, "max_companions": 2},
         },
         format="json",
     )
     assert res.status_code == 201, res.data
-    config = Event.objects.get(pk=res.data["id"]).ticket_config
-    assert config.is_public and config.max_companions == 2
+    event = Event.objects.get(pk=res.data["id"])
+    assert event.visibility == "public" and event.ticket_config.max_companions == 2
+    assert event.church_id == campus.church_id

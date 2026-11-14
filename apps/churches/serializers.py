@@ -338,6 +338,7 @@ class CellSerializer(serializers.ModelSerializer):
             "meeting_day_display",
             "meeting_time",
             "target_audience",
+            "visibility",
             "address",
             "description",
             "season",

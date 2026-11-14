@@ -12,6 +12,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.churches.choices import Visibility
 from apps.notifications import triggers
 from apps.people.cpf import apply_cpf
 
@@ -68,6 +69,16 @@ from .serializers import (
 Person = get_user_model()
 
 PEOPLE_SEARCH_LIMIT = 20
+
+
+def _reachable(person) -> Q:
+    """Open classes a person may enroll in: public ones, plus every class of
+    their own church."""
+    reachable = Q(visibility=Visibility.PUBLIC)
+    church_id = getattr(person.campus, "church_id", None) if person.campus_id else None
+    if church_id:
+        reachable |= Q(course__church_id=church_id)
+    return reachable
 
 
 class PaymentProviderUnavailable(APIException):
@@ -349,11 +360,9 @@ class CourseClassViewSet(viewsets.ModelViewSet):
     def open(self, request):
         """Classes open for members to enroll themselves, at the person's church."""
         qs = CourseClass.objects.filter(billing.open_classes_filter()).select_related(
-            "course", "campus"
+            "course", "course__church", "campus"
         ).prefetch_related("fee_items").order_by("start_date", "course__name", "name")
-        church_id = getattr(request.user.campus, "church_id", None)
-        if church_id:
-            qs = qs.filter(course__church_id=church_id)
+        qs = qs.filter(_reachable(request.user))
         return Response(OpenClassSerializer(qs, many=True, context={"request": request}).data)
 
     def _open_class(self, request, pk):
@@ -361,9 +370,8 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         course_class = get_object_or_404(
             CourseClass.objects.filter(billing.open_classes_filter()), pk=pk
         )
-        church_id = getattr(request.user.campus, "church_id", None)
-        if church_id and course_class.course.church_id != church_id:
-            raise PermissionDenied()
+        if not CourseClass.objects.filter(_reachable(request.user), pk=course_class.pk).exists():
+            raise PermissionDenied("Esta turma é só para membros da igreja.")
         return course_class
 
     @action(detail=True, methods=["post"], url_path="enroll", permission_classes=[IsAuthenticated])

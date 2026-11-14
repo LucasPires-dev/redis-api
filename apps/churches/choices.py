@@ -29,6 +29,14 @@ PRODUCTION_MINISTRY_KINDS = {
 }
 
 
+class Visibility(models.TextChoices):
+    """Who may find a cell, a course class or an event: the church's members
+    (people linked to one of its campuses) or everyone, with a public page."""
+
+    MEMBERS = "members", "Membros da igreja"
+    PUBLIC = "public", "Todos os públicos"
+
+
 class CellAudience(models.TextChoices):
     """Who a célula is for. Same values as the audience-facing MinistryKinds, plus
     an explicit "todos" — a mixed cell is a choice, not a missing field."""

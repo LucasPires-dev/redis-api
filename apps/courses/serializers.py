@@ -197,7 +197,8 @@ class CourseClassSerializer(serializers.ModelSerializer):
             "id", "course_id", "course_name", "campus", "campus_id",
             "name", "weekday", "start_time", "start_date", "end_date",
             "description", "teachers", "enrolled_count", "completed_count", "lesson_count",
-            "min_attendance_percent", "self_enrollment", "max_capacity", "enrollment_deadline", "reservation_days",
+            "min_attendance_percent", "self_enrollment", "visibility", "max_capacity", "enrollment_deadline",
+            "reservation_days",
             "max_installments", "refund_before_start", "fee_items", "base_price_cents",
             "seats_left", "waitlist_count", "can_manage", "can_manage_finances",
             "created_at",
@@ -303,6 +304,7 @@ class OpenClassSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source="course.name", read_only=True)
     course_description = serializers.CharField(source="course.description", read_only=True)
     campus = CampusMiniSerializer(read_only=True)
+    church_name = serializers.CharField(source="course.church.name", read_only=True)
     fee_items = ClassFeeItemSerializer(many=True, read_only=True)
     base_price_cents = serializers.IntegerField(read_only=True)
     # For the person asking: a seat held for them on the waitlist counts as free.
@@ -317,7 +319,7 @@ class OpenClassSerializer(serializers.ModelSerializer):
     class Meta:
         model = CourseClass
         fields = [
-            "id", "course_name", "course_description", "campus", "name", "description",
+            "id", "course_name", "course_description", "campus", "church_name", "visibility", "name", "description",
             "weekday", "start_time", "start_date", "end_date", "max_capacity",
             "enrollment_deadline", "reservation_days", "max_installments", "refund_before_start",
             "fee_items", "base_price_cents", "seats_left", "my_enrollment", "my_waitlist",

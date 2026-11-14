@@ -3,7 +3,7 @@ import uuid
 from django.conf import settings
 from django.db import models
 
-from apps.churches.choices import MinistryKind
+from apps.churches.choices import MinistryKind, Visibility
 
 from .choices import (
     DemandPriority,
@@ -82,6 +82,13 @@ class Event(models.Model):
         "churches.Campus", null=True, blank=True, on_delete=models.CASCADE, related_name="production_events"
     )
     ministry_kind = models.CharField(max_length=32, choices=MinistryKind.choices, null=True, blank=True)
+    # The church it belongs to: the campus's, or (a general event) its
+    # creator's. Set in save(); a general event is general within its church.
+    church = models.ForeignKey(
+        "churches.Church", null=True, blank=True, on_delete=models.CASCADE, related_name="events"
+    )
+    # Members only, or open to everyone with a public page.
+    visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.MEMBERS)
     starts_at = models.DateTimeField()
     ends_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=16, choices=EventStatus.choices, default=EventStatus.PLANNING)
@@ -106,6 +113,29 @@ class Event(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.starts_at:%d/%m/%Y %H:%M})"
+
+    def save(self, *args, **kwargs):
+        church_id = self.resolve_church_id()
+        if church_id and church_id != self.church_id:
+            self.church_id = church_id
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "church"}
+        super().save(*args, **kwargs)
+
+    def resolve_church_id(self):
+        """The campus's church; for a general event, the one already set, else
+        the creator's (or the only church there is)."""
+        from apps.churches.models import Campus, Church
+
+        if self.campus_id:
+            return Campus.objects.filter(pk=self.campus_id).values_list("church_id", flat=True).first()
+        if self.church_id:
+            return self.church_id
+        creator = getattr(self, "created_by", None)
+        if creator is not None and creator.campus_id:
+            return creator.campus.church_id
+        churches = list(Church.objects.values_list("pk", flat=True)[:2])
+        return churches[0] if len(churches) == 1 else None
 
 
 class RundownItem(models.Model):

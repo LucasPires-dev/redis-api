@@ -47,6 +47,7 @@ from .choices import (
     LeadershipRole,
     MinistryKind,
     SupervisionVisitKind,
+    Visibility,
     VisitorStatus,
     Weekday,
 )
@@ -488,6 +489,9 @@ class Cell(models.Model):
     meeting_day = models.PositiveSmallIntegerField(choices=Weekday.choices, null=True, blank=True)
     meeting_time = models.TimeField(null=True, blank=True)
     target_audience = models.CharField(max_length=32, choices=CellAudience.choices, blank=True)
+    # Members of the church only, or open to everyone (a public page shows
+    # just the church, the day and the time).
+    visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.MEMBERS)
     address = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
     # Reverse access: person.cells.all()

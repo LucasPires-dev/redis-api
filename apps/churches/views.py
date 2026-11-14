@@ -877,6 +877,7 @@ class CellViewSet(viewsets.ModelViewSet):
                 meeting_day=cell.meeting_day,
                 meeting_time=cell.meeting_time,
                 target_audience=cell.target_audience,
+                visibility=cell.visibility,
                 address=cell.address,
                 description=cell.description,
                 # Same mother, but the multiplication itself isn't repeated.
@@ -1031,6 +1032,7 @@ class CellViewSet(viewsets.ModelViewSet):
                 meeting_day=data.get("meeting_day", cell.meeting_day),
                 meeting_time=data.get("meeting_time", cell.meeting_time),
                 target_audience=data.get("target_audience", cell.target_audience),
+                visibility=cell.visibility,
                 address=data.get("address", cell.address),
                 start_date=cell.start_date,
                 end_date=cell.end_date,

@@ -19,8 +19,6 @@ class EventTicketConfig(models.Model):
     description = models.TextField(blank=True, help_text="O que o ingresso inclui")
     # How many companions (each with their own ticket) one person may bring.
     max_companions = models.PositiveSmallIntegerField(default=0)
-    # Open to anyone with the link (/evento/<id>), not only the campus.
-    is_public = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

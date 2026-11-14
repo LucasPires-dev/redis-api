@@ -1,7 +1,7 @@
 from django.db.models import F, Q
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from apps.churches.choices import PRODUCTION_MINISTRY_KINDS
+from apps.churches.choices import PRODUCTION_MINISTRY_KINDS, Visibility
 from apps.churches.models import Ministry
 from apps.churches.permissions import can_manage_campus, can_manage_ministry, general_led_kinds
 
@@ -175,12 +175,13 @@ def can_manage_demand_target(person, demand) -> bool:
 
 def scope_events(qs, person):
     """Visible events: everything for the manager; the general regular service
-    (no campus/kind) is visible to anyone authenticated; any other event, to whoever
+    (no campus/kind) to the members of its church; any other event, to whoever
     created it, produced it, leads the campus, leads (generally or locally) the
     owning ministry, or is a member of the owning ministry. Production teams
     (media, sound, …) see their campus's events. Events open for registration
-    are visible to everyone at their campus. Campus producers see every event
-    at their campuses; church-wide producers, every event."""
+    are visible to everyone at their campus (general ones, to the whole church).
+    Public events, to everyone. Campus producers see every event at their
+    campuses; church-wide producers, every event."""
     if person.is_manager or is_general_event_producer(person):
         # A church-wide producer produces on every campus, so sees every event.
         return qs
@@ -189,7 +190,6 @@ def scope_events(qs, person):
         Q(created_by=person)
         | Q(producer=person)
         | Q(roster_entries__person=person)
-        | Q(campus__isnull=True, ministry_kind__isnull=True)
         | Q(campus__leaderships__person=person)
         | Q(campus__ministries__kind=F("ministry_kind"), campus__ministries__leaderships__person=person)
         | Q(campus__ministries__kind=F("ministry_kind"), campus__ministries__members=person)
@@ -204,9 +204,12 @@ def scope_events(qs, person):
     # Events open for registration are for the whole campus: its members must
     # find them to sign up (a paid conference at their campus, for instance).
     if person.campus_id:
+        church_id = person.campus.church_id
         condition |= Q(campus_id=person.campus_id, ticket_config__isnull=False)
-    # Events with a public link: anyone may find and register.
-    condition |= Q(ticket_config__is_public=True)
+        condition |= Q(campus__isnull=True, church_id=church_id, ministry_kind__isnull=True)
+        condition |= Q(campus__isnull=True, church_id=church_id, ticket_config__isnull=False)
+    # Public events: anyone may find them and register.
+    condition |= Q(visibility=Visibility.PUBLIC)
 
     from .models import EventProducerAssignment
 

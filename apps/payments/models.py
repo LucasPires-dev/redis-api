@@ -115,6 +115,13 @@ class EventRegistration(models.Model):
     checked_in_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    # Set when the organizers refund it here (a refund made straight in Asaas
+    # arrives by webhook with the status only).
+    refunded_at = models.DateTimeField(null=True, blank=True)
+    refunded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    refund_note = models.CharField(max_length=200, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -199,3 +206,37 @@ class EventWaitlistEntry(models.Model):
 
     def __str__(self):
         return f"{self.person} — fila de {self.event}"
+
+
+class ExpenseCategory(models.TextChoices):
+    VENUE = "venue", "Local e estrutura"
+    FOOD = "food", "Alimentação"
+    AUDIOVISUAL = "audiovisual", "Som, luz e imagem"
+    MARKETING = "marketing", "Divulgação"
+    TRAVEL = "travel", "Transporte e hospedagem"
+    GUESTS = "guests", "Convidados e ministração"
+    MATERIALS = "materials", "Materiais"
+    OTHER = "other", "Outros"
+
+
+class EventExpense(models.Model):
+    """Money the event spent, for its balance (revenue - refunds - expenses)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey("production.Event", on_delete=models.CASCADE, related_name="expenses")
+    description = models.CharField(max_length=200)
+    category = models.CharField(max_length=16, choices=ExpenseCategory.choices, default=ExpenseCategory.OTHER)
+    amount_cents = models.PositiveIntegerField()
+    spent_on = models.DateField()
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-spent_on", "-created_at"]
+
+    def __str__(self):
+        return f"{self.description} — R$ {self.amount_cents / 100:.2f}"

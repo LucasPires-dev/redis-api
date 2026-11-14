@@ -80,6 +80,30 @@ def event_registration_confirmed(registration):
     )
 
 
+def event_registration_refunded(registration):
+    """The organizers gave the money back."""
+    notify(
+        registration.person_id,
+        "event_registration",
+        f"Inscrição reembolsada: {registration.event.title}",
+        body=f"Devolvemos R$ {registration.amount_cents / 100:.2f}.".replace(".", ","),
+        link="/app/eventos/inscricoes",
+        dedupe_key=f"event-registration-refunded:{registration.pk}",
+    )
+
+
+def event_registration_cancelled(registration):
+    """The organizers cancelled someone's registration."""
+    notify(
+        registration.person_id,
+        "event_registration",
+        f"Inscrição cancelada: {registration.event.title}",
+        body="A organização do evento cancelou sua inscrição.",
+        link=f"/app/eventos/{registration.event_id}",
+        dedupe_key=f"event-registration-cancelled:{registration.pk}",
+    )
+
+
 def event_waitlist_offer(entry):
     """Places opened at a sold-out event: held for the first in line."""
     places = "uma vaga" if entry.seats == 1 else f"{entry.seats} vagas"

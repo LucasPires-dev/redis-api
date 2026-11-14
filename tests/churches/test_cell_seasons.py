@@ -5,7 +5,7 @@ from django.utils import timezone
 
 from apps.churches.choices import LeadershipRole
 from apps.churches.models import Cell, CellGeneralLeadership, CellLeadership, CellMeeting, Season
-from tests.conftest import make_person
+from tests.conftest import CELL_REQUIRED_PAYLOAD, make_cell, make_person
 
 pytestmark = pytest.mark.django_db
 
@@ -41,7 +41,7 @@ def cells_leader(church, campus):
 
 @pytest.fixture
 def cell(campus, current_season):
-    return Cell.objects.create(campus=campus, season=current_season, name="GT Vida")
+    return make_cell(campus=campus, season=current_season, name="GT Vida")
 
 
 @pytest.fixture
@@ -129,11 +129,11 @@ def test_season_with_cells_cannot_be_deleted(api_client, manager, cell, current_
 
 
 def test_cells_general_leader_creates_cell_and_sees_all(api_client, cells_leader, campus, other_campus, current_season):
-    Cell.objects.create(campus=other_campus, season=current_season, name="GT Fora")
+    make_cell(campus=other_campus, season=current_season, name="GT Fora")
     api_client.force_authenticate(cells_leader)
     response = api_client.post(
         "/api/cells/",
-        {"campus_id": str(campus.id), "season_id": str(current_season.id), "name": "GT Novo"},
+        {"campus_id": str(campus.id), "season_id": str(current_season.id), "name": "GT Novo", **CELL_REQUIRED_PAYLOAD},
         format="json",
     )
     assert response.status_code == 201, response.data
@@ -147,7 +147,7 @@ def test_cell_leader_cannot_create_cell(api_client, cell_leader, campus, current
     api_client.force_authenticate(cell_leader)
     response = api_client.post(
         "/api/cells/",
-        {"campus_id": str(campus.id), "season_id": str(current_season.id), "name": "GT Meu"},
+        {"campus_id": str(campus.id), "season_id": str(current_season.id), "name": "GT Meu", **CELL_REQUIRED_PAYLOAD},
         format="json",
     )
     assert response.status_code == 403
@@ -170,7 +170,7 @@ def test_cell_dates_must_be_within_season(api_client, manager, cell, current_sea
 
 
 def test_filter_cells_by_current_season(api_client, manager, campus, cell, past_season):
-    Cell.objects.create(campus=campus, season=past_season, name="GT Antigo")
+    make_cell(campus=campus, season=past_season, name="GT Antigo")
     api_client.force_authenticate(manager)
     names = [c["name"] for c in api_client.get("/api/cells/?season=current").data["results"]]
     assert names == ["GT Vida"]
@@ -179,8 +179,8 @@ def test_filter_cells_by_current_season(api_client, manager, campus, cell, past_
 
 
 def test_active_cells_respect_cell_end_date(campus, current_season):
-    Cell.objects.create(campus=campus, season=current_season, name="Encerrada", end_date=TODAY - timedelta(days=1))
-    Cell.objects.create(campus=campus, season=current_season, name="Rodando")
+    make_cell(campus=campus, season=current_season, name="Encerrada", end_date=TODAY - timedelta(days=1))
+    make_cell(campus=campus, season=current_season, name="Rodando")
     assert [c.name for c in Cell.objects.active()] == ["Rodando"]
 
 
@@ -330,5 +330,5 @@ def test_me_exposes_cells_general_leader_flag(api_client, cells_leader):
 
 
 def test_reconciliation_only_offers_active_cells(campus, cell, past_season):
-    Cell.objects.create(campus=campus, season=past_season, name="GT Antigo")
+    make_cell(campus=campus, season=past_season, name="GT Antigo")
     assert [c.name for c in Cell.objects.active().filter(campus=campus)] == ["GT Vida"]

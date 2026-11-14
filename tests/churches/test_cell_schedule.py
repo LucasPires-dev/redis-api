@@ -25,7 +25,8 @@ def cells(campus):
         "quarta_tarde": Cell.objects.create(
             campus=campus, name="Quarta tarde", meeting_day=Weekday.WEDNESDAY, meeting_time=time(20, 30)
         ),
-        "sem_dia": Cell.objects.create(campus=campus, name="Sem dia"),
+        # An older cell without a schedule (the API no longer creates these).
+        "sem_dia": Cell.objects.create(campus=campus, name="Sem dia", target_audience="todos"),
     }
 
 

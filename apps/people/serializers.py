@@ -237,6 +237,10 @@ class MeSerializer(serializers.ModelSerializer):
     # Total activity points (see personal_total_points).
     total_points = serializers.SerializerMethodField()
 
+    # Whether a CPF is on file (the CPF itself is never returned): the payment
+    # screens ask for it only when it is missing.
+    has_cpf = serializers.SerializerMethodField()
+
     class Meta:
         model = Person
         fields = [
@@ -244,6 +248,7 @@ class MeSerializer(serializers.ModelSerializer):
             "name",
             "email",
             "phone",
+            "has_cpf",
             "campus",
             "church",
             "baptized",
@@ -318,3 +323,6 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_total_points(self, obj):
         return personal_total_points(obj)
+
+    def get_has_cpf(self, obj):
+        return bool(obj.cpf)

@@ -1,3 +1,5 @@
+from datetime import time
+
 import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
@@ -7,6 +9,7 @@ from apps.churches.models import (
     Activity,
     Campus,
     CampusLeadership,
+    Cell,
     Church,
     Ministry,
     MinistryLeadership,
@@ -52,6 +55,19 @@ def other_ministry(other_campus):
 def make_person(campus=None, **kwargs):
     kwargs.setdefault("password", "Senha123!")
     return Person.objects.create_user(campus=campus, **kwargs)
+
+
+# Day, time and audience every cell needs to be active (Cell.REQUIRED_FIELDS),
+# in API payload form.
+CELL_REQUIRED_PAYLOAD = {"meeting_day": 3, "meeting_time": "19:30", "target_audience": "todos"}
+
+
+def make_cell(**kwargs):
+    """A complete cell (Wednesday 19:30, for everyone) unless told otherwise."""
+    kwargs.setdefault("meeting_day", 3)
+    kwargs.setdefault("meeting_time", time(19, 30))
+    kwargs.setdefault("target_audience", "todos")
+    return Cell.objects.create(**kwargs)
 
 
 @pytest.fixture

@@ -32,6 +32,9 @@ from .models import EventRegistration, PaymentStatus
 
 logger = logging.getLogger(__name__)
 
+# Course enrollments use "enrollment:<uuid>"; event registrations the bare uuid.
+ENROLLMENT_PREFIX = "enrollment:"
+
 ASAAS_CONFIRMED_EVENTS = {"PAYMENT_CONFIRMED", "PAYMENT_RECEIVED"}
 ASAAS_REFUNDED_EVENTS = {"PAYMENT_REFUNDED", "PAYMENT_REFUND_IN_PROGRESS"}
 ASAAS_CANCELLED_EVENTS = {"PAYMENT_DELETED", "PAYMENT_OVERDUE"}
@@ -66,6 +69,9 @@ def asaas_webhook(request):
     if not external_ref:
         return Response({"ok": True})
 
+    if external_ref.startswith(ENROLLMENT_PREFIX):
+        return _handle_enrollment(event, payment, external_ref)
+
     try:
         registration = EventRegistration.objects.select_related("event").get(pk=external_ref)
     except (EventRegistration.DoesNotExist, ValueError, DjangoValidationError):
@@ -80,20 +86,9 @@ def asaas_webhook(request):
         return Response({"ok": True})
 
     if event in ASAAS_CONFIRMED_EVENTS:
-        try:
-            asaas_status = get_payment_status(payment_id)
-        except AsaasError:
-            # Non-2xx makes Asaas retry later, when its API may be reachable again.
-            logger.exception("Asaas webhook: couldn't verify payment %s", payment_id)
-            return Response({"detail": "Verification failed."}, status=status.HTTP_502_BAD_GATEWAY)
-        if asaas_status not in ASAAS_PAID_STATUSES:
-            logger.warning(
-                "Asaas webhook: %s for payment %s, but Asaas reports %s — ignored",
-                event,
-                payment_id,
-                asaas_status,
-            )
-            return Response({"ok": True})
+        rejected = _verify_paid(event, payment_id)
+        if rejected:
+            return rejected
         registration.payment_status = PaymentStatus.CONFIRMED
         registration.paid_at = timezone.now()
         try:
@@ -123,4 +118,49 @@ def asaas_webhook(request):
         return Response({"ok": True})
 
     broadcast_event_update(registration.event_id, "registration")
+    return Response({"ok": True})
+
+
+def _verify_paid(event, payment_id):
+    """Re-checks a confirmation against the Asaas API. Returns a Response to
+    send back when it must not be applied, or None when the payment is paid."""
+    try:
+        asaas_status = get_payment_status(payment_id)
+    except AsaasError:
+        # Non-2xx makes Asaas retry later, when its API may be reachable again.
+        logger.exception("Asaas webhook: couldn't verify payment %s", payment_id)
+        return Response({"detail": "Verification failed."}, status=status.HTTP_502_BAD_GATEWAY)
+    if asaas_status not in ASAAS_PAID_STATUSES:
+        logger.warning(
+            "Asaas webhook: %s for payment %s, but Asaas reports %s — ignored",
+            event,
+            payment_id,
+            asaas_status,
+        )
+        return Response({"ok": True})
+    return None
+
+
+def _handle_enrollment(event, payment, external_ref):
+    """Course enrollment payments (externalReference "enrollment:<uuid>"); each
+    installment arrives as its own payment. See apps.courses.billing."""
+    from apps.courses import billing
+
+    enrollment = billing.find_for_asaas_payment(external_ref, payment)
+    if enrollment is None:
+        logger.warning("Asaas webhook: payment %s doesn't match enrollment ref %s", payment.get("id"), external_ref)
+        return Response({"ok": True})
+
+    if event in ASAAS_CONFIRMED_EVENTS:
+        rejected = _verify_paid(event, payment.get("id", ""))
+        if rejected:
+            return rejected
+        billing.apply_asaas_paid(enrollment, payment)
+        logger.info("Enrollment %s: payment %s received via Asaas", enrollment.pk, payment.get("id"))
+    elif event in ASAAS_REFUNDED_EVENTS:
+        billing.apply_asaas_refunded(enrollment, payment)
+    elif event == "PAYMENT_OVERDUE":
+        billing.apply_asaas_overdue(enrollment, payment)
+    # PAYMENT_DELETED: our own cancellations (the ids are cleared first, so they
+    # don't even match); nothing to do.
     return Response({"ok": True})

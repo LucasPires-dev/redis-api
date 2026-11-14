@@ -1,10 +1,18 @@
 from rest_framework.routers import DefaultRouter
 
-from .views import CourseClassViewSet, CourseViewSet, LessonViewSet
+from .views import (
+    ClassExpenseViewSet,
+    CourseClassViewSet,
+    CourseViewSet,
+    EnrollmentViewSet,
+    LessonViewSet,
+)
 
 router = DefaultRouter()
 router.register("courses", CourseViewSet, basename="course")
 router.register("course-classes", CourseClassViewSet, basename="course-class")
+router.register("course-enrollments", EnrollmentViewSet, basename="course-enrollment")
+router.register("class-expenses", ClassExpenseViewSet, basename="class-expense")
 router.register("lessons", LessonViewSet, basename="lesson")
 
 urlpatterns = router.urls

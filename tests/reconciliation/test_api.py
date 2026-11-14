@@ -3,6 +3,7 @@ from uuid import uuid4
 import pytest
 
 from apps.reconciliation.models import Reconciliation
+from tests.conftest import make_cell
 
 pytestmark = pytest.mark.django_db
 
@@ -65,10 +66,9 @@ def _make_reconciliation(manager, campus, reconciliador):
 def test_add_to_cell_rejects_cross_campus_cell(
     api_client, manager, campus, other_campus, reconciliacao_ministry, reconciliador
 ):
-    from apps.churches.models import Cell
 
     reconciliation = _make_reconciliation(manager, campus, reconciliador)
-    other_cell = Cell.objects.create(campus=other_campus, name="GT de Fora")
+    other_cell = make_cell(campus=other_campus, name="GT de Fora")
 
     resp = auth(api_client, reconciliador).post(
         f"/api/reconciliations/{reconciliation.id}/cell/", {"cell_id": str(other_cell.id)}
@@ -79,10 +79,9 @@ def test_add_to_cell_rejects_cross_campus_cell(
 def test_add_to_cell_by_reconciliador_succeeds(
     api_client, manager, campus, reconciliacao_ministry, reconciliador
 ):
-    from apps.churches.models import Cell
 
     reconciliation = _make_reconciliation(manager, campus, reconciliador)
-    cell = Cell.objects.create(campus=campus, name="GT Central")
+    cell = make_cell(campus=campus, name="GT Central")
 
     resp = auth(api_client, reconciliador).post(
         f"/api/reconciliations/{reconciliation.id}/cell/", {"cell_id": str(cell.id)}
@@ -228,11 +227,10 @@ def test_rank_and_file_reconciliador_sees_available_cells_and_ministries_at_camp
     only grant visibility via leadership or membership in that specific
     cell/ministry) — the dedicated available-cells/available-ministries actions
     must work regardless."""
-    from apps.churches.models import Cell
 
     reconciliation = _make_reconciliation(manager, campus, reconciliador)
-    cell = Cell.objects.create(campus=campus, name="GT Central")
-    Cell.objects.create(campus=other_campus, name="GT de Fora")  # different campus, must not appear
+    cell = make_cell(campus=campus, name="GT Central")
+    make_cell(campus=other_campus, name="GT de Fora")  # different campus, must not appear
 
     resp = auth(api_client, reconciliador).get(f"/api/reconciliations/{reconciliation.id}/available-cells/")
     assert resp.status_code == 200

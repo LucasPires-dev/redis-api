@@ -9,6 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.response import Response
 
+from apps.people.cpf import apply_cpf, require_cpf
 from apps.production.models import Event
 from apps.production.permissions import can_manage_event, scope_events
 from apps.production.realtime import broadcast_event_update
@@ -63,6 +64,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         event = serializer.validated_data["event"]
+        cpf = serializer.validated_data.pop("cpf", "")
 
         try:
             config = event.ticket_config
@@ -85,6 +87,10 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
                     {"event_id": "Vagas esgotadas."}
                 )
 
+        if config.price_cents > 0:
+            apply_cpf(self.request.user, cpf)
+            require_cpf(self.request.user)
+
         already = drf_serializers.ValidationError({"event_id": "Você já está inscrito neste evento."})
         # Only active registrations count: after cancelling, the person may register again.
         if EventRegistration.objects.filter(
@@ -105,6 +111,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
                 customer_id = find_or_create_customer(
                     email=self.request.user.email,
                     name=self.request.user.name,
+                    cpf=self.request.user.cpf,
                 )
                 charge = create_charge(
                     customer_id=customer_id,

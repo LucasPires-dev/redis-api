@@ -34,9 +34,13 @@ def free_config(event):
 
 
 @pytest.fixture
-def fake_asaas(monkeypatch):
-    """Replaces every Asaas HTTP call. `state` lets a test pick what Asaas answers."""
+def fake_asaas(monkeypatch, regular_person):
+    """Replaces every Asaas HTTP call. `state` lets a test pick what Asaas answers.
+    The registering person already has a CPF on file (Asaas requires one)."""
     from apps.payments.asaas import AsaasError
+
+    regular_person.cpf = "52998224725"
+    regular_person.save(update_fields=["cpf"])
 
     state = {
         "status": "CONFIRMED",
@@ -47,7 +51,8 @@ def fake_asaas(monkeypatch):
         "cancelled": [],
     }
 
-    def find_or_create_customer(email, name):
+    def find_or_create_customer(email, name, cpf=""):
+        state.setdefault("customers", []).append({"email": email, "cpf": cpf})
         return "cus_123"
 
     def create_charge(customer_id, amount_cents, description, external_reference):

@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from apps.people.cpf import CpfField
 from apps.production.models import Event
 
 from .models import ACTIVE_STATUSES, EventRegistration, EventTicketConfig
@@ -101,12 +102,15 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
     event_id = serializers.PrimaryKeyRelatedField(
         queryset=Event.objects.all(), source="event", write_only=True
     )
+    # Asked when the person has none on file: Asaas needs it to charge.
+    cpf = CpfField(write_only=True)
 
     class Meta:
         model = EventRegistration
         fields = [
             "id",
             "event_id",
+            "cpf",
             "person",
             "payment_status",
             "amount_cents",

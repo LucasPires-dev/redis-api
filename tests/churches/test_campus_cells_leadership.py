@@ -4,8 +4,8 @@ import pytest
 from django.utils import timezone
 
 from apps.churches.choices import LeadershipRole
-from apps.churches.models import CampusCellsLeadership, Cell, Season
-from tests.conftest import make_person
+from apps.churches.models import CampusCellsLeadership, Season
+from tests.conftest import CELL_REQUIRED_PAYLOAD, make_cell, make_person
 
 pytestmark = pytest.mark.django_db
 
@@ -34,16 +34,16 @@ def campus_cells_leader(campus):
 
 @pytest.fixture
 def cell(campus, season):
-    return Cell.objects.create(campus=campus, season=season, name="GT Vida")
+    return make_cell(campus=campus, season=season, name="GT Vida")
 
 
 @pytest.fixture
 def other_cell(other_campus, season):
-    return Cell.objects.create(campus=other_campus, season=season, name="GT Fora")
+    return make_cell(campus=other_campus, season=season, name="GT Fora")
 
 
 def cell_payload(campus, season, name="GT Novo"):
-    return {"campus_id": str(campus.id), "season_id": str(season.id), "name": name}
+    return {"campus_id": str(campus.id), "season_id": str(season.id), "name": name, **CELL_REQUIRED_PAYLOAD}
 
 
 # --- Assigning the campus cells leader -----------------------------------------------

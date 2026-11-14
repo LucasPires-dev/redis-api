@@ -1237,9 +1237,11 @@ class CellVisitorViewSet(viewsets.ModelViewSet):
         visitor = self.get_object()
         if visitor.status == VisitorStatus.MEMBER:
             raise ValidationError("Este visitante já é membro da célula.")
-        serializer = MakeVisitorMemberInputSerializer(data=request.data)
+        serializer = MakeVisitorMemberInputSerializer(data=request.data, context={"visitor": visitor})
         serializer.is_valid(raise_exception=True)
         person = serializer.validated_data.get("person_id")
+        if person is None and not serializer.validated_data.get("email") and hasattr(visitor, "join_request"):
+            person = visitor.join_request.person
         with transaction.atomic():
             if person is None:
                 email = serializer.validated_data["email"]

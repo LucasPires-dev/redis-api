@@ -274,6 +274,46 @@ def demand_answered(demand, by):
 # ── Joining a campus ─────────────────────────────────────────────────────────
 
 
+def cell_join_requested(join_request):
+    """Someone asked to join a public cell: its leaders decide."""
+    from apps.churches.choices import CellRole
+
+    cell = join_request.cell
+    leaders = [
+        lead.person_id
+        for lead in cell.leaderships.all()
+        if lead.role in (CellRole.LEADER, CellRole.CO_LEADER)
+    ]
+    notify(
+        leaders,
+        "cell_join_request",
+        f"Quer participar: {cell.name}",
+        body=f"{join_request.person.name} pediu para participar da célula.",
+        link=f"/app/celulas/{cell.pk}",
+        dedupe_key=f"cell-join-request:{join_request.pk}",
+    )
+
+
+def cell_join_answered(join_request):
+    """The person hears back. Accepted: the cell's page shows the address."""
+    from apps.churches.choices import JoinRequestStatus
+
+    cell = join_request.cell
+    accepted = join_request.status == JoinRequestStatus.APPROVED
+    notify(
+        join_request.person_id,
+        "cell_join_answered",
+        "Pedido aceito: bem-vindo à célula!" if accepted else "Pedido para participar da célula",
+        body=(
+            f"A liderança aceitou seu pedido. Veja o endereço e os líderes da célula ({cell.campus.church.name})."
+            if accepted
+            else "A liderança não pôde aceitar seu pedido agora. Veja outras células abertas."
+        ),
+        link=f"/celula/{cell.pk}" if accepted else "/app/explorar",
+        dedupe_key=f"cell-join-answered:{join_request.pk}",
+    )
+
+
 def supervision_visit_registered(visit):
     """The cell's leaders hear their supervisor followed the cell up. The notes
     stay with the supervisor and coordination."""

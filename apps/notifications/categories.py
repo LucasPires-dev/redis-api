@@ -16,8 +16,17 @@ CATEGORIES = {
     },
     "cells": {
         "label": "Células",
-        "description": "Encontros para registrar, pessoas para cuidar, supervisão e visitantes encaminhados.",
-        "kinds": {"meeting_not_registered", "cell_care", "supervision_visit", "visitor_forwarded"},
+        "description": (
+            "Encontros para registrar, pessoas para cuidar, supervisão, visitantes e pedidos para participar."
+        ),
+        "kinds": {
+            "meeting_not_registered",
+            "cell_care",
+            "supervision_visit",
+            "visitor_forwarded",
+            "cell_join_request",
+            "cell_join_answered",
+        },
     },
     "events": {
         "label": "Eventos",

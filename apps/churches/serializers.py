@@ -578,7 +578,10 @@ class MakeVisitorMemberInputSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
 
     def validate(self, attrs):
-        if not attrs.get("person_id") and not attrs.get("email"):
+        # A visitor who asked through "Quero participar" has an account: none needed.
+        visitor = self.context.get("visitor")
+        has_account = visitor is not None and hasattr(visitor, "join_request")
+        if not attrs.get("person_id") and not attrs.get("email") and not has_account:
             raise serializers.ValidationError(
                 "Escolha uma pessoa já cadastrada ou informe o e-mail para cadastrar o visitante."
             )

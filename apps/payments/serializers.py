@@ -332,13 +332,14 @@ class PublicTicketTypeSerializer(serializers.ModelSerializer):
 
 
 def public_event(event):
-    """What the public link shows: enough to decide and sign up, nothing internal."""
-    config = event.ticket_config
+    """What the public link shows: enough to decide and sign up, nothing internal.
+    `ticket` is None for an event without registration (just come)."""
+    try:
+        config = event.ticket_config
+    except EventTicketConfig.DoesNotExist:
+        config = None
     now = timezone.now()
-    types = [t for t in config.types.all() if t.on_sale(now)]
-    free = waitlist.free_seats(event)
-    closed = (config.registration_deadline and now > config.registration_deadline) or event.starts_at <= now
-    return {
+    data = {
         "id": event.pk,
         "title": event.title,
         "description": event.description,
@@ -346,16 +347,27 @@ def public_event(event):
         "ends_at": event.ends_at,
         "campus": {"name": event.campus.name, "city": event.campus.city} if event.campus_id else None,
         "church": event.church.name if event.church_id else None,
-        "ticket": {
+        "ticket": None,
+        "sold_out": False,
+        "registration_open": False,
+    }
+    if config is None:
+        return data
+    types = [t for t in config.types.all() if t.on_sale(now)]
+    free = waitlist.free_seats(event)
+    closed = (config.registration_deadline and now > config.registration_deadline) or event.starts_at <= now
+    data.update(
+        ticket={
             "description": config.description,
             "price_cents": config.price_cents,
             "registration_deadline": config.registration_deadline,
             "max_companions": config.max_companions,
             "types": PublicTicketTypeSerializer(types, many=True).data,
         },
-        "sold_out": free is not None and free <= 0,
-        "registration_open": not closed,
-    }
+        sold_out=free is not None and free <= 0,
+        registration_open=not closed,
+    )
+    return data
 
 
 class RefundInputSerializer(serializers.Serializer):

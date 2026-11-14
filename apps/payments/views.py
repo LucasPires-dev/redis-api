@@ -549,11 +549,11 @@ def event_report_csv_view(request, event_id):
 @authentication_classes([])
 @permission_classes([AllowAny])
 def public_event_view(request, event_id):
-    """The public link of an event (/evento/<id>): only for public events with registration."""
+    """The public link of an event (/evento/<id>): only for public events."""
     event = (
         Event.objects.select_related("campus", "church", "ticket_config")
         .prefetch_related("ticket_config__types")
-        .filter(pk=event_id, visibility=Visibility.PUBLIC, ticket_config__isnull=False)
+        .filter(pk=event_id, visibility=Visibility.PUBLIC)
         .first()
     )
     if event is None:

@@ -118,12 +118,14 @@ def test_public_events_reach_everyone(api_client, general_service, outsider):
     general_service.save()
     assert str(general_service.id) in visible(as_(api_client, outsider))
 
-    # The public page needs registration open.
+    # The public page works with or without registration.
     api_client.force_authenticate(user=None)
-    assert api_client.get(f"/api/payments/public-events/{general_service.id}/").status_code == 404
+    res = api_client.get(f"/api/payments/public-events/{general_service.id}/")
+    assert res.status_code == 200 and res.data["ticket"] is None and res.data["registration_open"] is False
     EventTicketConfig.objects.create(event=general_service, price_cents=0)
     res = api_client.get(f"/api/payments/public-events/{general_service.id}/")
     assert res.status_code == 200 and res.data["church"] == "Igreja Luz às Nações"
+    assert res.data["registration_open"] is True
 
 
 def test_a_general_event_with_tickets_is_for_the_whole_church(api_client, manager, other_campus):

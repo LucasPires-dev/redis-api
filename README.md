@@ -1,83 +1,175 @@
-# Redis · API
+# Redis API
 
-API de gestão para uma **igreja com vários campus**. Organiza a estrutura da igreja (campus, ministérios, células e equipes), controla quem vê o quê por nível de liderança, coordena a **produção dos cultos em tempo real** e acompanha os novos convertidos pelo Ministério de Reconciliação.
+API da plataforma **Redis**, um sistema de gestão para igrejas com múltiplos
+campus. O backend centraliza pessoas, ministérios, células, lideranças,
+reconciliação de novos convertidos e produção de eventos.
 
-> Front-end: [redis](https://github.com/LucasPires-dev/redis)
+> **Nota:** Redis é o nome do produto. O banco de dados principal da aplicação é
+> PostgreSQL; Redis é usado como infraestrutura para comunicação em tempo real e
+> processamento assíncrono.
 
-## ✨ Funcionalidades
+## Visão geral
 
-- **Estrutura da igreja**: igreja → campus → ministérios (jovens, crianças, mulheres…) → equipes e células, cada um com sua liderança
-- **Controle de acesso por papel**: gestor geral, líder de campus, líder geral de ministério (todos os campus) e líder de ministério local, cada um enxergando só o que lhe cabe
-- **Equipes com atividades e pontuação**: tarefas, conclusões e pontos por equipe
-- **Produção de eventos**: roteiro do culto (*rundown*) com status por item, demandas, escala de voluntários e checklist, **atualizados em tempo real** para toda a equipe
-- **Reconciliação**: respostas de um Google Forms são importadas da planilha conectada, sem duplicar, e viram acompanhamentos atribuídos a um responsável
+- API REST construída com Django e Django REST Framework.
+- Autenticação JWT e permissões organizadas por papel e escopo de atuação.
+- Atualizações em tempo real com Django Channels e WebSockets.
+- Tarefas agendadas e assíncronas com Celery.
+- Documentação interativa da API com OpenAPI e Swagger.
+- Integração opcional com Google Sheets para sincronização de novos convertidos.
 
-## 🛠️ Stack
+## Tecnologias
 
-| Camada | Tecnologias |
-|---|---|
-| Backend | Python · Django 5 · Django REST Framework · SimpleJWT · django-filter · drf-spectacular |
-| Tempo real | Django Channels · Daphne · Redis |
-| Tarefas assíncronas | Celery · Celery Beat |
+| Área | Tecnologias |
+| --- | --- |
+| Linguagem e framework | Python 3.11+, Django 5, Django REST Framework |
+| Banco de dados | PostgreSQL |
+| Autenticação e documentação | Simple JWT, DRF Spectacular |
+| Tempo real e tarefas | Django Channels, Daphne, Celery, Redis |
 | Integrações | Google Sheets API |
-| Banco | PostgreSQL |
-| Testes | pytest · **112 testes** |
-| Infra | Docker · Docker Compose · Docker Swarm · Poetry |
+| Testes | pytest, pytest-django |
+| Containers | Docker e Docker Compose |
 
-## 🧠 Destaques técnicos
+## Pré-requisitos
 
-- **Permissões testadas por papel**: cada app tem suas classes de permissão, e os testes cobrem o que cada nível de liderança pode ver e alterar.
-- **WebSocket com JWT**: o navegador não envia headers no handshake do WebSocket, então o token vai na query string e é validado com o mesmo `JWTAuthentication` do REST, sem duplicar a lógica.
-- **Tempo real enxuto**: o servidor só avisa *o que* mudou (`rundown_item_status`, `demand`…) e o front-end busca de novo pela API REST. O WebSocket nunca vira uma segunda fonte de dados.
-- **Importação idempotente**: as linhas da planilha são lidas pelo cabeçalho, e não pela posição da coluna, e deduplicadas por e-mail, telefone e data de envio. A sincronização roda periodicamente pelo Celery Beat.
-- **Usuário customizado** (`Person`) como modelo de autenticação.
-- **Settings por ambiente** (`development`, `production`, `test`) com `python-decouple` e `DATABASE_URL`.
+Para executar a API diretamente no Windows ou Linux:
 
-## 🚀 Como rodar
+- Python 3.11 ou superior.
+- Poetry 2.x.
+- PostgreSQL em execução.
+- Git.
 
-```bash
-cp .env.example .env
-poetry install
+Redis é necessário para usar WebSockets e tarefas assíncronas. A API REST pode
+ser desenvolvida sem iniciar o worker do Celery. Para executar toda a stack com
+Docker Compose, também é necessário Docker com suporte a containers Linux.
+
+## Instalação e configuração local
+
+### 1. Instale as dependências
+
+Na raiz deste repositório:
+
+```powershell
+poetry install --with dev
+```
+
+### 2. Configure as variáveis de ambiente
+
+Crie o arquivo local a partir do exemplo. No PowerShell:
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Edite `.env` e configure, no mínimo:
+
+```dotenv
+DJANGO_SETTINGS_MODULE=config.settings.development
+SECRET_KEY=uma-chave-aleatoria-para-desenvolvimento
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+DATABASE_URL=postgresql://postgres:SUA_SENHA@127.0.0.1:5432/redis_db
+```
+
+Gere uma chave local com:
+
+```powershell
+poetry run python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Crie um banco chamado `redis_db` no PostgreSQL, por exemplo pelo pgAdmin, e
+substitua `SUA_SENHA` pela senha do usuário do banco. Se a senha contiver
+caracteres especiais, use a codificação URL correspondente no `DATABASE_URL`.
+Não use os valores de exemplo nem compartilhe ou versione o arquivo `.env`.
+
+Para habilitar as chamadas do frontend local, confirme que
+`CORS_ALLOWED_ORIGINS` inclui a origem em que o Vite iniciou (normalmente
+`http://localhost:8080`; o exemplo inclui portas próximas).
+
+### 3. Prepare o banco e inicie a API
+
+```powershell
 poetry run python manage.py migrate
-poetry run python manage.py seed_initial_church   # dados iniciais
-poetry run python manage.py runserver
+poetry run python manage.py runserver 127.0.0.1:8000
 ```
 
-Com Docker (API, worker, beat e Redis):
+A API ficará disponível em `http://127.0.0.1:8000`. A documentação interativa
+fica em `http://127.0.0.1:8000/api/docs/`; o esquema OpenAPI está em
+`http://127.0.0.1:8000/api/schema/`.
 
-```bash
-docker compose up -d --build
+Opcionalmente, crie um usuário administrador:
+
+```powershell
+poetry run python manage.py createsuperuser
 ```
 
-Testes:
+O painel administrativo fica em `http://127.0.0.1:8000/admin/`.
 
-```bash
+## Redis, WebSockets e tarefas em segundo plano
+
+As configurações padrão esperam Redis em `127.0.0.1:6379`:
+
+- `REDIS_URL` usa o banco lógico `0` para Django Channels.
+- `CELERY_BROKER_URL` usa o banco lógico `1` para Celery.
+
+Defina essas variáveis no `.env` se o serviço estiver em outro endereço. Com
+Redis disponível e as credenciais de Google Sheets configuradas, os processos
+de worker e agendamento podem ser iniciados em terminais separados:
+
+```powershell
+poetry run celery -A config worker -l info
+poetry run celery -A config beat -l info
+```
+
+O sincronizador de reconciliação usa `GOOGLE_SHEETS_CREDENTIALS_JSON` e
+`GOOGLE_SHEETS_SPREADSHEET_ID`. Sem essas credenciais, deixe o Beat desligado
+para evitar executar a sincronização sem configuração.
+
+## Executar com Docker Compose
+
+Configure `.env` conforme a seção anterior e, na raiz deste repositório, execute:
+
+```powershell
+docker compose run --rm app python manage.py migrate
+docker compose up --build
+```
+
+O Compose inicia API, Redis, worker e agendador. A API é publicada na porta
+`8090` e Redis na porta `6379`. No ambiente Compose, os containers usam o nome
+do serviço `redis` para se conectar entre si.
+
+## Testes e qualidade
+
+Os testes usam SQLite em memória e uma camada de canais em memória, sem exigir
+uma instância de Redis:
+
+```powershell
 poetry run pytest
 ```
 
-Documentação interativa da API em `http://localhost:8000/api/docs/`.
+Verificações de estilo disponíveis:
 
-## 🔌 Recursos
-
-| Módulo | O que expõe |
-|---|---|
-| `people` | Pessoas, login (JWT), autenticação do WebSocket |
-| `churches` | Igreja, campus, ministérios, células, equipes, atividades e lideranças |
-| `production` | Eventos, roteiro, demandas, escala, checklist e WebSocket |
-| `reconciliation` | Leads da planilha e acompanhamentos |
-
-## 📁 Estrutura
-
+```powershell
+poetry run black --check .
+poetry run isort --check-only .
+poetry run flake8 .
 ```
+
+## Organização do código
+
+```text
 apps/
-  people/          # usuário (Person), auth, WebSocket
-  churches/        # estrutura da igreja e permissões
-  production/      # produção de eventos + tempo real (Channels)
-  reconciliation/  # Google Sheets + Celery
-config/settings/   # base, development, production, test
-tests/             # testes por app
+├── churches/       # Igrejas, campus, ministérios, células e lideranças
+├── people/         # Pessoas, autenticação e identidade de acesso
+├── production/     # Eventos, demandas, escala e produção em tempo real
+└── reconciliation/ # Acompanhamento e sincronização de novos convertidos
+config/             # Configurações Django, ASGI e rotas do projeto
+tests/              # Testes de API, permissões, tarefas e WebSockets
 ```
 
----
+## Segurança e configuração
 
-Desenvolvido por [Lucas C. Pires](https://github.com/LucasPires-dev) · Full-stack Python
+- `.env` contém credenciais locais e não deve ser commitado.
+- `DEBUG=True`, chaves de exemplo e configurações permissivas são somente para
+  desenvolvimento.
+- Para produção, use configurações de produção, segredos fortes e origens CORS
+  explicitamente permitidas.

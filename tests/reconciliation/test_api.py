@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from apps.reconciliation.models import Reconciliation, ReconciliationLead
+from apps.reconciliation.models import Reconciliation
 
 pytestmark = pytest.mark.django_db
 
@@ -176,7 +176,7 @@ def test_dashboard_buckets_by_reconciliador_and_campus(
         email="outro-reconciliador@ilan.church", name="Outro", campus=other_campus, password=None
     )
     other_ministry.members.add(other_reconciliador)
-    r2 = _make_reconciliation(manager, other_campus, other_reconciliador)
+    _make_reconciliation(manager, other_campus, other_reconciliador)
 
     resp = auth(api_client, manager).get("/api/reconciliations/dashboard/")
     assert resp.status_code == 200

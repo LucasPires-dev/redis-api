@@ -6,10 +6,10 @@ from django.utils import timezone
 from apps.production.consumers import EventConsumer
 from apps.production.models import Event
 
-# transaction=True: o teste padrão (django_db) roda dentro de uma transação aberta
-# que nunca comita — a thread que o database_sync_to_async do consumer usa pra
-# consultar o banco não enxerga essa transação e trava esperando lock do SQLite.
-# Com transaction=True os dados são comitados de verdade (e truncados depois).
+# transaction=True: the default django_db test runs inside an open transaction that
+# never commits — the thread the consumer's database_sync_to_async uses to query the
+# DB can't see that transaction and hangs waiting on a SQLite lock. With
+# transaction=True the data is actually committed (and truncated afterwards).
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
@@ -43,8 +43,8 @@ async def test_authorized_person_connects_and_receives_broadcast(jovens_leader, 
 
 @pytest.mark.asyncio
 async def test_technical_ministry_member_can_also_connect(media_member, event):
-    """Mesma regra de visibilidade dos endpoints REST (scope_events): técnico do
-    campus vê/recebe updates de qualquer evento local, não só o que criou."""
+    """Same visibility rule as the REST endpoints (scope_events): a campus technical
+    member sees/receives updates for any local event, not only the ones they created."""
     communicator, connected = await _connect(media_member, event.id)
     assert connected
     await communicator.disconnect()

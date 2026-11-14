@@ -1,10 +1,10 @@
 """
 ASGI config for config project.
 
-Roteia HTTP pro Django normal e WebSocket pros consumers do Channels — ambos no
-mesmo processo ASGI (Daphne). Precisa chamar django.setup() e resolver o app
-Django (get_asgi_application) ANTES de importar qualquer coisa que toque
-models/apps (routing dos consumers), senão estoura AppRegistryNotReady.
+Routes HTTP to regular Django and WebSocket to the Channels consumers — both in
+the same ASGI process (Daphne). It must call django.setup() and resolve the
+Django app (get_asgi_application) BEFORE importing anything that touches
+models/apps (the consumers' routing), otherwise AppRegistryNotReady is raised.
 
 For more information on this file, see
 https://docs.djangoproject.com/en/5.2/howto/deployment/asgi/

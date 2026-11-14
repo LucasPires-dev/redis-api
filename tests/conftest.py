@@ -151,7 +151,7 @@ def eventual_activity(team, team_leader):
 
 @pytest.fixture
 def jovens_ministry(campus):
-    """Ministério de público (cria Eventos) usado pelos testes de apps.production."""
+    """Audience-facing ministry (creates Events), used by the apps.production tests."""
     return Ministry.objects.create(campus=campus, kind=MinistryKind.JOVENS, name="Jovens")
 
 
@@ -164,7 +164,7 @@ def jovens_leader(campus, jovens_ministry):
 
 @pytest.fixture
 def media_ministry(campus):
-    """Ministério técnico/produção (recebe Demand) usado pelos testes de apps.production."""
+    """Technical/production ministry (receives Demands), used by the apps.production tests."""
     return Ministry.objects.create(campus=campus, kind=MinistryKind.MEDIA, name="Mídia")
 
 

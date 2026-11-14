@@ -4,13 +4,17 @@ from .models import (
     Activity,
     ActivityCompletion,
     Campus,
+    CampusCellsLeadership,
     CampusLeadership,
     Cell,
+    CellGeneralLeadership,
     CellLeadership,
+    CellMeeting,
     Church,
     Ministry,
     MinistryGeneralLeadership,
     MinistryLeadership,
+    Season,
     Team,
     TeamLeadership,
     TeamPointAward,
@@ -84,11 +88,38 @@ class CellLeadershipInline(admin.TabularInline):
 
 @admin.register(Cell)
 class CellAdmin(admin.ModelAdmin):
-    list_display = ["name", "campus", "target_audience", "weekday", "address"]
-    list_filter = ["target_audience", "campus"]
+    list_display = ["name", "campus", "season", "target_audience", "meeting_day", "meeting_time"]
+    list_filter = ["season", "meeting_day", "target_audience", "campus"]
     search_fields = ["name", "address", "description"]
     filter_horizontal = ["members"]
     inlines = [CellLeadershipInline]
+
+
+@admin.register(Season)
+class SeasonAdmin(admin.ModelAdmin):
+    list_display = ["name", "church", "start_date", "end_date"]
+    list_filter = ["church"]
+
+
+@admin.register(CampusCellsLeadership)
+class CampusCellsLeadershipAdmin(admin.ModelAdmin):
+    list_display = ["person", "campus", "role"]
+    list_filter = ["role", "campus"]
+    autocomplete_fields = ["person"]
+
+
+@admin.register(CellGeneralLeadership)
+class CellGeneralLeadershipAdmin(admin.ModelAdmin):
+    list_display = ["church"]
+    filter_horizontal = ["leaders"]
+
+
+@admin.register(CellMeeting)
+class CellMeetingAdmin(admin.ModelAdmin):
+    list_display = ["cell", "date", "visitors_count", "created_by"]
+    list_filter = ["cell__season", "cell__campus"]
+    date_hierarchy = "date"
+    filter_horizontal = ["attendees"]
 
 
 @admin.register(CellLeadership)

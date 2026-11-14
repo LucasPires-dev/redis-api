@@ -4,6 +4,9 @@ from django.db import models
 class EventType(models.TextChoices):
     CULTO = "culto", "Culto"
     MINISTRY_EVENT = "ministry_event", "Evento de Ministério"
+    TRAINING = "training", "Treinamento"
+    CONFERENCE = "conference", "Conferência"
+    SPECIAL_SERVICE = "special_service", "Culto Especial"
 
 
 class EventStatus(models.TextChoices):

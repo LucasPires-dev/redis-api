@@ -17,21 +17,26 @@ from .choices import (
 
 
 class Event(models.Model):
-    """Generalização de "Culto": tanto o culto regular semanal (criado pela
-    Coordenação Geral, campus e ministry_kind nulos) quanto um evento de um
-    ministério de público (Retiro de Jovens, Encontro de Mulheres...). campus nulo
-    = escopo geral (líder geral do ministério, vale para todos os campi); campus
-    preenchido = escopo local (líder local daquele campus)."""
+    """Generalization of "Culto": both the regular weekly service (created by the
+    Coordenação Geral, with null campus and ministry_kind) and an event of an
+    audience-facing ministry (Retiro de Jovens, Encontro de Mulheres...). Null
+    campus = general scope (the ministry's general leader, applies to every
+    campus); campus set = local scope (that campus's local leader)."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=200)
-    event_type = models.CharField(max_length=16, choices=EventType.choices, default=EventType.CULTO)
+    description = models.TextField(blank=True)
+    event_type = models.CharField(max_length=20, choices=EventType.choices, default=EventType.CULTO)
     campus = models.ForeignKey(
         "churches.Campus", null=True, blank=True, on_delete=models.CASCADE, related_name="production_events"
     )
     ministry_kind = models.CharField(max_length=32, choices=MinistryKind.choices, null=True, blank=True)
     starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=16, choices=EventStatus.choices, default=EventStatus.PLANNING)
+    producer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="produced_events"
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -46,9 +51,9 @@ class Event(models.Model):
 
 
 class RundownItem(models.Model):
-    """Um item da ordem do culto/evento, com um ministério principal responsável.
-    `order` é a posição na lista (não precisa bater com scheduled_time — permite
-    reordenar sem recalcular horários)."""
+    """One item in the service/event running order, with one main ministry in
+    charge. `order` is the position in the list (it doesn't have to match
+    scheduled_time — allows reordering without recalculating times)."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="rundown_items")
@@ -72,10 +77,10 @@ class RundownItem(models.Model):
 
 
 class RundownItemStatus(models.Model):
-    """O sinal 🟢🟡🔴 de um ministério para um item específico do rundown — não
-    precisa ser o ministry_kind principal do item: qualquer ministério envolvido
-    pode reportar seu próprio status (ex: Luz reporta status no item "Louvor 1"
-    mesmo o responsável principal sendo Louvor)."""
+    """A ministry's 🟢🟡🔴 signal for a specific rundown item — it doesn't have to
+    be the item's main ministry_kind: any involved ministry can report its own
+    status (e.g. Luz reports status on the "Louvor 1" item even though Louvor is
+    the main one in charge)."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     rundown_item = models.ForeignKey(RundownItem, on_delete=models.CASCADE, related_name="statuses")
@@ -98,15 +103,15 @@ class RundownItemStatus(models.Model):
 
 
 class Demand(models.Model):
-    """Pedido de um ministério a outro (ex: Jovens pede a Mídia que prepare os
-    slides do Retiro). `event` é opcional — uma demanda pode ser "geral", sem
-    culto/evento específico. from_campus/to_campus registram o campus de cada
-    lado no momento da criação (útil quando o solicitante é líder geral, sem um
-    campus fixo próprio)."""
+    """A request from one ministry to another (e.g. Jovens asks Mídia to prepare
+    the Retiro slides). `event` is optional — a demand can be "general", with no
+    specific service/event. from_campus/to_campus record each side's campus at
+    creation time (useful when the requester is a general leader with no fixed
+    campus of their own)."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(Event, null=True, blank=True, on_delete=models.CASCADE, related_name="demands")
-    from_ministry_kind = models.CharField(max_length=32, choices=MinistryKind.choices)
+    from_ministry_kind = models.CharField(max_length=32, choices=MinistryKind.choices, null=True, blank=True)
     from_campus = models.ForeignKey(
         "churches.Campus", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -134,9 +139,9 @@ class Demand(models.Model):
 
 
 class EventRosterEntry(models.Model):
-    """Quem serve num Evento. Liga a um `Ministry` específico (campus-bound), não
-    só a um `ministry_kind` — o convite vem da lista de membros daquele Ministry
-    (Ministry.members), igual ao picker de apps.reconciliation."""
+    """Who serves at an Event. Links to a specific `Ministry` (campus-bound), not
+    just a `ministry_kind` — the invite comes from that Ministry's member list
+    (Ministry.members), same as the apps.reconciliation picker."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="roster_entries")
@@ -160,8 +165,8 @@ class EventRosterEntry(models.Model):
 
 
 class EventChecklistItem(models.Model):
-    """Item de checklist pré-evento, ad-hoc por ministério — sem template por
-    enquanto (Fase 3/4)."""
+    """Pre-event checklist item, ad hoc per ministry — no templates for now
+    (Phase 3/4)."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="checklist_items")
@@ -182,3 +187,26 @@ class EventChecklistItem(models.Model):
 
     def __str__(self):
         return f"{self.text} ({self.get_ministry_kind_display()})"
+
+
+class EventProducerAssignment(models.Model):
+    """Event Producer assignment. campus=null → church-wide (every campus);
+    campus set → produces only at that campus."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    person = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="event_producer_assignments"
+    )
+    campus = models.ForeignKey(
+        "churches.Campus", null=True, blank=True, on_delete=models.CASCADE, related_name="event_producers"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["person", "campus"], name="unique_event_producer"),
+        ]
+
+    def __str__(self):
+        scope = self.campus.name if self.campus else "Church-wide"
+        return f"{self.person} — Produtor ({scope})"

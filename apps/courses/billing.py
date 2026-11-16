@@ -201,7 +201,8 @@ def refresh_status(enrollment, save=True):
         return
     paid = enrollment.paid_cents
     if enrollment.amount_cents == 0:
-        enrollment.payment_status = PS.WAIVED if enrollment.discount_cents else PS.FREE
+        discounted = enrollment.discount_cents or enrollment.coupon_discount_cents
+        enrollment.payment_status = PS.WAIVED if discounted else PS.FREE
     elif paid >= enrollment.amount_cents:
         enrollment.payment_status = PS.PAID
         enrollment.paid_at = enrollment.paid_at or timezone.now()
@@ -222,7 +223,7 @@ def refresh_status(enrollment, save=True):
 # ── Enrolling ────────────────────────────────────────────────────────────────
 
 
-def enroll(course_class, person, choices, installments=1, *, self_service, send_charge=True):
+def enroll(course_class, person, choices, installments=1, *, self_service, send_charge=True, coupon=None):
     """Enrolls a person (by themselves or by a coordinator). Raises
     ValidationError for a business rule, ProviderUnavailable when the charge
     couldn't be created (then nothing is kept)."""
@@ -234,8 +235,12 @@ def enroll(course_class, person, choices, installments=1, *, self_service, send_
     gross = sum(item.price_cents for item, _ in selection)
     if 0 < gross < MIN_CHARGE_CENTS:
         raise serializers.ValidationError({"items": "O total precisa ser de pelo menos R$ 5,00."})
-    if gross:
-        check_installments(course_class, gross, installments)
+    from apps.payments import coupons
+
+    coupon_discount = coupons.discount_for(coupon, gross)
+    amount = gross - coupon_discount
+    if amount:
+        check_installments(course_class, amount, installments)
         if send_charge:
             require_cpf(person)
 
@@ -245,17 +250,20 @@ def enroll(course_class, person, choices, installments=1, *, self_service, send_
 
     try:
         with transaction.atomic():
+            coupons.claim(coupon)
             enrollment = Enrollment.objects.create(
                 course_class=course_class,
                 person=person,
                 status=EnrollmentStatus.ACTIVE,
                 gross_cents=gross,
-                amount_cents=gross,
-                installments=installments if gross else 1,
-                payment_status=PS.PENDING if gross else PS.FREE,
+                coupon=coupon,
+                coupon_discount_cents=coupon_discount,
+                amount_cents=amount,
+                installments=installments if amount else 1,
+                payment_status=PS.PENDING if amount else (PS.WAIVED if gross else PS.FREE),
                 expires_at=(
                     timezone.now() + timedelta(days=course_class.reservation_days)
-                    if gross and self_service
+                    if amount and self_service
                     else None
                 ),
             )
@@ -272,7 +280,7 @@ def enroll(course_class, person, choices, installments=1, *, self_service, send_
     except IntegrityError:
         raise already  # double click: the DB constraint wins
 
-    if gross and send_charge:
+    if amount and send_charge:
         try:
             _open_charge(enrollment, installments)
             enrollment.save()
@@ -365,12 +373,13 @@ def grant_scholarship(enrollment, discount_cents, reason, by):
         )
     if not enrollment.gross_cents:
         raise serializers.ValidationError({"detail": "Esta matrícula é gratuita."})
-    if discount_cents > enrollment.gross_cents:
+    base = enrollment.gross_cents - enrollment.coupon_discount_cents  # after the coupon
+    if discount_cents > base:
         raise serializers.ValidationError({"discount_cents": "A bolsa não pode passar do valor da matrícula."})
     reason = (reason or "").strip()
     if discount_cents and not reason:
         raise serializers.ValidationError({"reason": "Informe o motivo da bolsa."})
-    if 0 < enrollment.gross_cents - discount_cents < MIN_CHARGE_CENTS:
+    if 0 < base - discount_cents < MIN_CHARGE_CENTS:
         raise serializers.ValidationError(
             {"discount_cents": "O valor restante precisa ser de pelo menos R$ 5,00 (ou bolsa integral)."}
         )
@@ -382,7 +391,7 @@ def grant_scholarship(enrollment, discount_cents, reason, by):
         raise ProviderUnavailable("Não foi possível atualizar a cobrança agora. Tente novamente em alguns minutos.")
 
     enrollment.discount_cents = discount_cents
-    enrollment.amount_cents = enrollment.gross_cents - discount_cents
+    enrollment.amount_cents = base - discount_cents
     enrollment.scholarship_reason = reason if discount_cents else ""
     enrollment.scholarship_granted_by = by if discount_cents else None
     enrollment.payment_status = PS.PENDING  # recomputed below
@@ -571,6 +580,7 @@ def finance_summary(course_class):
         "received_manual_cents": net_received - online,
         "outstanding_cents": sum(e.balance_cents for e in holding),
         "scholarship_cents": sum(e.discount_cents for e in holding),
+        "coupon_cents": sum(e.coupon_discount_cents for e in holding),
         "refunded_cents": refunded,
         "expenses_cents": expenses,
         "balance_cents": net_received - expenses,

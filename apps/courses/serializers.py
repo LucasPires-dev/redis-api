@@ -425,10 +425,12 @@ class EnrollmentFinanceSerializer(EnrollmentSerializer):
     scholarship_granted_by = PersonMiniSerializer(read_only=True)
     paid_cents = serializers.IntegerField(read_only=True)
     balance_cents = serializers.IntegerField(read_only=True)
+    coupon_code = serializers.CharField(source="coupon.code", read_only=True, default=None)
 
     class Meta(EnrollmentSerializer.Meta):
         fields = EnrollmentSerializer.Meta.fields + [
-            "items", "payments", "gross_cents", "discount_cents", "amount_cents",
+            "items", "payments", "gross_cents", "coupon_code", "coupon_discount_cents",
+            "discount_cents", "amount_cents",
             "paid_cents", "balance_cents", "refunded_cents", "scholarship_reason",
             "scholarship_granted_by", "installments", "payment_url", "expires_at",
             "paid_at", "has_overdue_installment",
@@ -494,6 +496,7 @@ class EnrollInputSerializer(serializers.Serializer):
     installments = serializers.IntegerField(min_value=1, max_value=12, default=1)
     # Needed by Asaas for an online charge; kept on the person (see apps.people.cpf).
     cpf = CpfField()
+    coupon_code = serializers.CharField(required=False, allow_blank=True, max_length=30)
 
 
 class EnrollmentInputSerializer(EnrollInputSerializer):

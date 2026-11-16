@@ -211,7 +211,12 @@ class Enrollment(models.Model):
     # Frozen at enrollment: later price changes don't touch existing enrollments.
     gross_cents = models.PositiveIntegerField(default=0)  # sum of the chosen items
     discount_cents = models.PositiveIntegerField(default=0)  # scholarship
-    amount_cents = models.PositiveIntegerField(default=0)  # gross - discount: what is owed
+    # Discount coupon (see apps.payments.coupons), applied at enrollment.
+    coupon = models.ForeignKey(
+        "payments.Coupon", null=True, blank=True, on_delete=models.RESTRICT, related_name="enrollments"
+    )
+    coupon_discount_cents = models.PositiveIntegerField(default=0)
+    amount_cents = models.PositiveIntegerField(default=0)  # gross - coupon - scholarship: what is owed
     refunded_cents = models.PositiveIntegerField(default=0)
     scholarship_reason = models.CharField(max_length=200, blank=True)
     scholarship_granted_by = models.ForeignKey(

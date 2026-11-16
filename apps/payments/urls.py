@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from .coupons import CouponViewSet
 from .views import (
     EventExpenseViewSet,
     EventRegistrationViewSet,
@@ -20,6 +21,7 @@ router.register("ticket-types", EventTicketTypeViewSet, basename="ticket-type")
 router.register("registrations", EventRegistrationViewSet, basename="registration")
 router.register("waitlist", WaitlistViewSet, basename="event-waitlist")
 router.register("expenses", EventExpenseViewSet, basename="event-expense")
+router.register("coupons", CouponViewSet, basename="coupon")
 
 urlpatterns = [
     path("payments/public-events/<uuid:event_id>/", public_event_view, name="public-event"),

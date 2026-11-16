@@ -20,7 +20,7 @@ from apps.production.models import Event
 from apps.production.permissions import can_manage_event, scope_events
 from apps.production.realtime import broadcast_event_update
 
-from . import checkin, reports, waitlist
+from . import checkin, coupons, reports, waitlist
 from .asaas import AsaasError, cancel_charge, create_charge, find_or_create_customer, refund_payment
 from .models import (
     ACTIVE_STATUSES,
@@ -142,6 +142,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         event = data["event"]
         cpf = data.pop("cpf", "")
         guest_names = data.pop("guest_names", [])
+        coupon_code = data.pop("coupon_code", "").strip()
         ticket_type = data.get("ticket_type")
         person = self.request.user
         fail = drf_serializers.ValidationError
@@ -175,6 +176,9 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
         seats = 1 + len(guest_names)
         unit_price = ticket_type.price_cents if ticket_type else config.price_cents
         amount = unit_price * seats
+        coupon = coupons.find(coupon_code, event=event) if coupon_code else None
+        discount = coupons.discount_for(coupon, amount)
+        amount -= discount
 
         already = fail({"event_id": "Você já está inscrito neste evento."})
         # Only active registrations count: after cancelling, the person may register again.
@@ -198,7 +202,10 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
                 if ticket_type and ticket_type.capacity is not None:
                     if waitlist.type_taken(ticket_type) + seats > ticket_type.capacity:
                         raise fail({"ticket_type_id": f"O ingresso {ticket_type.name} esgotou."})
-                registration = serializer.save(person=person, amount_cents=amount, seats=seats)
+                coupons.claim(coupon)
+                registration = serializer.save(
+                    person=person, amount_cents=amount, seats=seats, coupon=coupon, discount_cents=discount
+                )
                 for name in guest_names:
                     EventRegistrationGuest.objects.create(registration=registration, name=name)
                 waitlist.taken_by_registration(event, person)
@@ -357,6 +364,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
             "waitlist": EventWaitlistEntry.objects.filter(event=event).count(),
             # What was actually charged, not count x today's price.
             "revenue_cents": confirmed.aggregate(total=Sum("amount_cents"))["total"] or 0,
+            "discount_cents": confirmed.aggregate(total=Sum("discount_cents"))["total"] or 0,
         }
         serializer = RegistrationStatsSerializer(data)
         return Response(serializer.data)

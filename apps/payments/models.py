@@ -105,6 +105,11 @@ class EventRegistration(models.Model):
     # Price charged for this registration, frozen at registration time: revenue
     # must not change when the organizers later edit the ticket price.
     amount_cents = models.PositiveIntegerField(default=0)
+    # The discount coupon used, and what it took off (already out of amount_cents).
+    coupon = models.ForeignKey(
+        "payments.Coupon", null=True, blank=True, on_delete=models.RESTRICT, related_name="event_registrations"
+    )
+    discount_cents = models.PositiveIntegerField(default=0)
     asaas_payment_id = models.CharField(max_length=100, blank=True)
     payment_url = models.URLField(blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
@@ -238,3 +243,52 @@ class EventExpense(models.Model):
 
     def __str__(self):
         return f"{self.description} — R$ {self.amount_cents / 100:.2f}"
+
+
+class CouponKind(models.TextChoices):
+    PERCENT = "percent", "Percentual"
+    FIXED = "fixed", "Valor fixo"
+
+
+class Coupon(models.Model):
+    """A discount code for one paid event or one course class (see coupons.py)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(
+        "production.Event", null=True, blank=True, on_delete=models.CASCADE, related_name="coupons"
+    )
+    course_class = models.ForeignKey(
+        "courses.CourseClass", null=True, blank=True, on_delete=models.CASCADE, related_name="coupons"
+    )
+    code = models.CharField(max_length=30)
+    kind = models.CharField(max_length=8, choices=CouponKind.choices, default=CouponKind.PERCENT)
+    percent = models.PositiveSmallIntegerField(null=True, blank=True)
+    amount_cents = models.PositiveIntegerField(null=True, blank=True)
+    max_uses = models.PositiveIntegerField(null=True, blank=True, help_text="null = sem limite")
+    valid_until = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(event__isnull=False, course_class__isnull=True)
+                | models.Q(event__isnull=True, course_class__isnull=False),
+                name="coupon_event_xor_class",
+            ),
+            models.UniqueConstraint(
+                fields=["event", "code"], condition=models.Q(event__isnull=False), name="unique_coupon_per_event"
+            ),
+            models.UniqueConstraint(
+                fields=["course_class", "code"],
+                condition=models.Q(course_class__isnull=False),
+                name="unique_coupon_per_class",
+            ),
+        ]
+
+    def __str__(self):
+        return self.code

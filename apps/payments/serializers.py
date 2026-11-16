@@ -219,6 +219,8 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
         child=serializers.CharField(max_length=150), write_only=True, required=False, default=list
     )
     guests = RegistrationGuestSerializer(many=True, read_only=True)
+    coupon_code = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=30)
+    coupon = serializers.CharField(source="coupon.code", read_only=True, default=None)
 
     def get_ticket_type(self, obj):
         return {"id": obj.ticket_type_id, "name": obj.ticket_type.name} if obj.ticket_type_id else None
@@ -244,6 +246,9 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
             "guests",
             "payment_status",
             "amount_cents",
+            "coupon_code",
+            "coupon",
+            "discount_cents",
             "payment_url",
             "paid_at",
             "ticket_code",
@@ -303,6 +308,7 @@ class RegistrationStatsSerializer(serializers.Serializer):
     seats = serializers.IntegerField()
     waitlist = serializers.IntegerField()
     revenue_cents = serializers.IntegerField()
+    discount_cents = serializers.IntegerField()
 
 
 class WaitlistEntrySerializer(serializers.ModelSerializer):

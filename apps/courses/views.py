@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 
 from apps.churches.choices import Visibility
 from apps.notifications import triggers
+from apps.payments import coupons
 from apps.people.cpf import apply_cpf
 
 from . import billing, certificates, completion, course_report, tracks, waitlist
@@ -382,6 +383,8 @@ class CourseClassViewSet(viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         tracks.check_prerequisites(course_class, request.user)
         apply_cpf(request.user, ser.validated_data.get("cpf", ""))
+        code = ser.validated_data.get("coupon_code", "").strip()
+        coupon = coupons.find(code, course_class=course_class) if code else None
         enrollment = _billing(
             billing.enroll,
             course_class,
@@ -389,6 +392,7 @@ class CourseClassViewSet(viewsets.ModelViewSet):
             ser.validated_data["items"],
             ser.validated_data["installments"],
             self_service=True,
+            coupon=coupon,
         )
         return Response(
             MyEnrollmentSerializer(enrollment, context={"request": request}).data,
